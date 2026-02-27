@@ -205,3 +205,34 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# local
+.env
+*.env
+.env.local
+.DS_Store
+__pycache__/
+
+# Experiment outputs and generated data
+**/experiments_output/
+**/experiments_output_*/
+**/archive/
+*.jsonl
+*.csv
+
+# Test outputs
+test_agent_output.*
+
+# Generated plots and visualizations
+*.png
+*.jpg
+*.jpeg
+
+# Evaluation results
+**/agent_results/
+**/evaluation/
+
+# Metadata files
+**/metadata/
+generation_stats_*.json
+cluster_map_*.json
