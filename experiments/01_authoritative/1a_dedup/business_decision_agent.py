@@ -234,11 +234,12 @@ Provide your decision in JSON format only (no other text):
                 "processing_time_ms": int(response['latency_ms']),
                 "cost_usd": round(response['cost'], 6),
                 "model": self.model,
-                "input_tokens": response['tokens'],  # Total tokens
-                "output_tokens": 0,  # LangChain doesn't split these
+                "input_tokens": response.get('input_tokens', 0),
+                "output_tokens": response.get('output_tokens', 0),
+                "total_tokens": response['tokens'],
                 "timestamp": datetime.utcnow().isoformat()
             }
-            
+
             return result
             
         except Exception as e:

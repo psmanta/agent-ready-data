@@ -134,60 +134,138 @@ class BaseExperimentAgent(ABC):
                 start_time = time.time()
                 response = self.llm.invoke(messages)
                 latency_ms = (time.time() - start_time) * 1000
-                
+
                 # Extract token usage and cost
-                tokens = self._extract_token_usage(response)
-                cost = self._calculate_cost(tokens)
-                
+                token_usage = self._extract_token_usage(response)
+                cost = self._calculate_cost(token_usage)
+    
                 # Update tracking
                 if self.track_costs:
-                    self.total_tokens += tokens
+                    self.total_tokens += token_usage['total_tokens']
                     self.total_cost += cost
-                
+    
                 return {
                     'content': response.content,
-                    'tokens': tokens,
+                    'tokens': token_usage['total_tokens'],
+                    'input_tokens': token_usage['input_tokens'],
+                    'output_tokens': token_usage['output_tokens'],
                     'cost': cost,
                     'latency_ms': latency_ms
                 }
-                
+
             except Exception as e:
                 if attempt == retry_count - 1:
                     raise Exception(f"LLM invocation failed after {retry_count} attempts: {e}")
                 time.sleep(2 ** attempt)  # Exponential backoff
+
+    def _load_pricing_config(self) -> Dict[str, Any]:
+        """Load pricing configuration from external file"""
+        import json
+        from pathlib import Path
     
-    def _extract_token_usage(self, response) -> int:
-        """Extract token usage from LLM response"""
+        # Try to find pricing config
+        config_paths = [
+            Path(__file__).parent / "model_pricing.json",  # Same directory as base_agent.py
+            Path("shared/agents/model_pricing.json"),       # Relative to project root
+            Path("model_pricing.json"),                     # Current directory
+        ]
+    
+        for config_path in config_paths:
+            if config_path.exists():
+                with open(config_path) as f:
+                    return json.load(f)
+    
+        # Fallback to hardcoded prices if config not found
+        print("⚠️  Warning: model_pricing.json not found, using fallback prices")
+        return {
+            "pricing": {
+                "gpt-4": {"input": 0.03, "output": 0.06, "per_tokens": 1000},
+                "gpt-4-turbo": {"input": 0.01, "output": 0.03, "per_tokens": 1000},
+                "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015, "per_tokens": 1000},
+                "claude-3-opus": {"input": 0.015, "output": 0.075, "per_tokens": 1000},
+                "claude-3-sonnet": {"input": 0.003, "output": 0.015, "per_tokens": 1000},
+                "claude-3-haiku": {"input": 0.00025, "output": 0.00125, "per_tokens": 1000},
+            }
+        }
+
+    def _extract_token_usage(self, response) -> Dict[str, int]:
+        """
+        Extract token usage from LLM response
+        Returns dict with 'input_tokens', 'output_tokens', 'total_tokens'
+        """
+        tokens = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+    
         try:
+            # Try LangChain's response_metadata
             if hasattr(response, 'response_metadata'):
-                usage = response.response_metadata.get('token_usage', {})
-                return usage.get('total_tokens', 0)
-        except:
-            pass
-        return 0
+                metadata = response.response_metadata
+            
+                # Anthropic format
+                if 'usage' in metadata:
+                    usage = metadata['usage']
+                    tokens['input_tokens'] = usage.get('input_tokens', 0)
+                    tokens['output_tokens'] = usage.get('output_tokens', 0)
+                    tokens['total_tokens'] = tokens['input_tokens'] + tokens['output_tokens']
+            
+                # OpenAI format
+                elif 'token_usage' in metadata:
+                    usage = metadata['token_usage']
+                    tokens['input_tokens'] = usage.get('prompt_tokens', 0)
+                    tokens['output_tokens'] = usage.get('completion_tokens', 0)
+                    tokens['total_tokens'] = usage.get('total_tokens', 0)
+        
+            # Try direct usage attribute (some LangChain versions)
+            elif hasattr(response, 'usage'):
+                usage = response.usage
+                tokens['input_tokens'] = getattr(usage, 'input_tokens', 0)
+                tokens['output_tokens'] = getattr(usage, 'output_tokens', 0)
+                tokens['total_tokens'] = tokens['input_tokens'] + tokens['output_tokens']
     
-    def _calculate_cost(self, tokens: int) -> float:
+        except Exception as e:
+            print(f"⚠️  Warning: Could not extract token usage: {e}")
+    
+        return tokens
+
+    def _calculate_cost(self, tokens: Dict[str, int]) -> float:
         """
         Calculate cost based on model and token usage
-        
-        Prices as of Jan 2025 (update as needed)
+    
+        Args:
+            tokens: Dict with 'input_tokens', 'output_tokens', 'total_tokens'
+    
+        Returns:
+            Cost in USD
         """
-        pricing = {
-            'gpt-4': {'input': 0.03, 'output': 0.06},  # per 1K tokens
-            'gpt-4-turbo': {'input': 0.01, 'output': 0.03},
-            'gpt-3.5-turbo': {'input': 0.0005, 'output': 0.0015},
-            'claude-3-opus': {'input': 0.015, 'output': 0.075},
-            'claude-3-sonnet': {'input': 0.003, 'output': 0.015},
-        }
-        
-        # Simplified: assume 50/50 input/output split
+        if not hasattr(self, '_pricing_config'):
+            self._pricing_config = self._load_pricing_config()
+    
+        pricing = self._pricing_config.get('pricing', {})
+    
+        # Find matching model in pricing config
         model_key = self.model.lower()
-        for key in pricing:
+        model_pricing = None
+    
+        for key, prices in pricing.items():
             if key in model_key:
-                avg_price = (pricing[key]['input'] + pricing[key]['output']) / 2
-                return (tokens / 1000) * avg_price
-        
-        return 0.0  # Unknown model
+                model_pricing = prices
+                break
+    
+        if not model_pricing:
+            print(f"⚠️  Warning: No pricing found for model '{self.model}', cost will be $0.00")
+            return 0.0
+    
+        # Calculate cost using actual input/output split
+        input_tokens = tokens.get('input_tokens', 0)
+        output_tokens = tokens.get('output_tokens', 0)
+        per_tokens = model_pricing.get('per_tokens', 1000)
+    
+        input_cost = (input_tokens / per_tokens) * model_pricing['input']
+        output_cost = (output_tokens / per_tokens) * model_pricing['output']
+    
+        total_cost = input_cost + output_cost
+    
+        return total_cost
+
     
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """

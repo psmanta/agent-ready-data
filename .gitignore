@@ -222,6 +222,7 @@ __pycache__/
 
 # Test outputs
 test_agent_output.*
+test_cost_fix*
 
 # Generated plots and visualizations
 *.png
