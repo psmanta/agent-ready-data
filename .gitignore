@@ -238,3 +238,4 @@ test_cost_fix*
 generation_stats_*.json
 cluster_map_*.json
 experiments/01_authoritative/1a_dedup/test_output/
+.env
