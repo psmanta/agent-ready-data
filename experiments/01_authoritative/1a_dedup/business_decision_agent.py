@@ -116,6 +116,8 @@ Provide your assessment with:
 1. Priority level (HIGH_PRIORITY, MEDIUM_PRIORITY, or LOW_PRIORITY)
 2. Confidence score (0.0 to 1.0) - how confident are you in this decision?
 3. Brief reasoning (2-3 sentences explaining the key factors in your decision)
+4. Key factors: list the 2-3 field names that most influenced your decision
+
 
 IMPORTANT: Base your decision on the DATA provided, not on assumptions. If certain 
 fields suggest conflicting priorities, weigh them based on their relative importance 
@@ -125,7 +127,8 @@ Output format (JSON only, no other text):
 {
   "business_decision": "HIGH_PRIORITY",
   "agent_confidence": 0.85,
-  "decision_reasoning": "Customer has high lifetime value and strong engagement, but showing early churn risk signals. Proactive outreach recommended to retain this valuable customer."
+  "decision_reasoning": "Customer has high lifetime value and strong engagement, but showing early churn risk signals. Proactive outreach recommended to retain this valuable customer.",
+  "key_factors": ["total_spend", "churn_risk_score"]
 }
 """
 
@@ -227,10 +230,12 @@ Provide your decision in JSON format only (no other text):
             # Build result
             result = {
                 "record_id": record_id,
+                "customer_segment": record.get("customer_segment"),
                 "input_hash": input_hash,
                 "business_decision": decision["business_decision"],
                 "agent_confidence": float(decision["agent_confidence"]),
                 "decision_reasoning": decision["decision_reasoning"],
+                "key_factors": decision.get("key_factors", []),
                 "processing_time_ms": int(response['latency_ms']),
                 "cost_usd": round(response['cost'], 6),
                 "model": self.model,
@@ -246,12 +251,17 @@ Provide your decision in JSON format only (no other text):
             # Error handling
             return {
                 "record_id": record_id,
+                "customer_segment": record.get("customer_segment"),
                 "input_hash": input_hash,
                 "business_decision": "ERROR",
                 "agent_confidence": 0.0,
                 "decision_reasoning": f"Error during processing: {str(e)}",
+                "key_factors": [],
                 "processing_time_ms": 0,
                 "cost_usd": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
                 "model": self.model,
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat()
@@ -276,6 +286,10 @@ Provide your decision in JSON format only (no other text):
         if not (0.0 <= confidence <= 1.0):
             raise ValueError(f"Confidence out of range: {confidence}")
 
+        # key_factors is optional but should be a list if present
+        if "key_factors" in decision and not isinstance(decision["key_factors"], list):
+                decision["key_factors"] = []  # coerce silently rather than failing
+
 
 # ============================================================================
 # DATASET PROCESSING
@@ -286,7 +300,7 @@ def process_dataset(
     output_file: Path,
     model: str = "claude-3-haiku-20240307",
     max_records: int = None,
-    api_key: str = None
+    api_key: str = None,
     temperature: float = 0.0
 ) -> Dict[str, Any]:
     """
@@ -374,6 +388,7 @@ def process_dataset(
         "avg_processing_time_ms": round(avg_processing_time, 2),
         "total_cost_usd": round(agent.total_cost, 4),
         "model": model,
+        "temperature": temperature,
         "input_file": str(input_file),
         "output_file": str(output_file),
         "timestamp": datetime.utcnow().isoformat()
@@ -504,7 +519,7 @@ Examples:
             output_file=output_file,
             model=args.model,
             max_records=args.max_records,
-            api_key=api_key
+            api_key=api_key,
             temperature=args.temperature
         )
         
