@@ -45,11 +45,15 @@ class DecisionQualityEvaluator:
     Evaluates decision quality across duplication levels
     """
     
-    def __init__(self, decisions_dir: Path, output_dir: Path):
+    def __init__(self, decisions_dir: Path, output_dir: Path, cluster_map_dir: Path = None):
         self.decisions_dir = Path(decisions_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Load cluster maps (record_id -> customer_id lookup per duplication level)
+        self.cluster_map_dir = Path(cluster_map_dir) if cluster_map_dir else None
+        self.cluster_maps = self._load_cluster_maps()
+
         # Load all datasets
         self.datasets = self._load_all_datasets()
         self.baseline = self.datasets.get('0pct', {})
@@ -58,7 +62,57 @@ class DecisionQualityEvaluator:
         self.metrics = {}
         self.composite_score = 0.0
 
-    def _load_all_datasets(self) -> Dict[str, Dict[str, Any]]:
+    def _load_cluster_maps(self) -> Dict[str, Dict[str, str]]:
+        """
+        Load cluster map files and build record_id -> customer_id lookup per dup level.
+
+        cluster_map_{level}pct.json structure:
+            { "CUST_000001": { "record_ids": ["REC_AAA", "REC_BBB"], ... }, ... }
+
+        Returns:
+            { "10pct": { "REC_AAA": "CUST_000001", "REC_BBB": "CUST_000001", ... }, ... }
+        """
+        if not self.cluster_map_dir or not self.cluster_map_dir.exists():
+            print("⚠️  No cluster_map_dir provided — consistency analysis will be limited")
+            return {}
+
+        cluster_maps = {}
+        for map_file in sorted(self.cluster_map_dir.glob("cluster_map_*.json")):
+            filename = map_file.name
+            dup_level = filename.replace("cluster_map_", "").replace(".json", "")
+            if not dup_level.endswith("pct"):
+                continue
+
+            with open(map_file) as f:
+                raw_map = json.load(f)
+
+            # Invert: customer_id -> [record_ids]  =>  record_id -> customer_id
+            record_to_customer = {}
+            for customer_id, cluster_info in raw_map.items():
+                for record_id in cluster_info.get("record_ids", []):
+                    record_to_customer[record_id] = customer_id
+
+            cluster_maps[dup_level] = record_to_customer
+            print(f"  ✅ Cluster map loaded: {dup_level} ({len(record_to_customer)} record mappings)")
+
+        print(f"\n📂 Loaded {len(cluster_maps)} cluster maps")
+        return cluster_maps
+
+    def _get_record_to_customer_map(self, dup_level: str) -> Dict[str, str]:
+        """
+        Return the record_id -> customer_id lookup for a given duplication level.
+        Falls back to identity mapping (record_id -> record_id) if no cluster map available,
+        which means consistency analysis will show 100% — a safe but clearly labelled fallback.
+        """
+        if dup_level in self.cluster_maps:
+            return self.cluster_maps[dup_level]
+
+        # Fallback: no cluster map — warn and return identity map
+        print(f"  ⚠️  No cluster map for {dup_level} — using identity mapping (consistency will read 100%)")
+        decisions = self.datasets.get(dup_level, {}).get('decisions', [])
+        return {d['record_id']: d['record_id'] for d in decisions}
+
+
         """Load all decision files"""
         datasets = {}
         
@@ -125,12 +179,17 @@ class DecisionQualityEvaluator:
             if dup_level == '0pct':
                 consistency_by_level[dup_level] = 1.0  # No duplicates = perfect consistency
                 continue
-            
-            # Group decisions by customer_id
+
+            # Get record_id -> customer_id mapping from cluster map
+            record_to_customer = self._get_record_to_customer_map(dup_level)
+
+            # Group decisions by true customer_id (not record_id)
             customer_decisions = defaultdict(list)
             for decision in data['decisions']:
-                customer_id = decision['record_id']
+                record_id = decision['record_id']
+                customer_id = record_to_customer.get(record_id, record_id)  # fallback to record_id
                 customer_decisions[customer_id].append({
+                    'record_id': record_id,
                     'decision': decision['business_decision'],
                     'confidence': decision['agent_confidence'],
                     'reasoning': decision['decision_reasoning']
@@ -349,7 +408,8 @@ class DecisionQualityEvaluator:
             baseline_data = self.datasets['0pct']
             baseline_total_cost = sum(d.get('cost_usd', 0) for d in baseline_data['decisions'])
             baseline_total_records = len(baseline_data['decisions'])
-            baseline_unique_customers = len(set(d['record_id'] for d in baseline_data['decisions']))
+            # At 0% duplication every record IS a unique customer, so record count = customer count
+            baseline_unique_customers = baseline_total_records
             baseline_cost_per_record = baseline_total_cost / baseline_total_records if baseline_total_records > 0 else 0.0001
         
         print(f"  Baseline (0pct): {baseline_unique_customers} unique customers, "
@@ -361,7 +421,13 @@ class DecisionQualityEvaluator:
                                      key=lambda x: int(x[0].replace('pct', ''))):
             total_cost = sum(d.get('cost_usd', 0) for d in data['decisions'])
             total_records = len(data['decisions'])
-            unique_customers = len(set(d['record_id'] for d in data['decisions']))
+
+            # Use cluster map to count true unique customers
+            record_to_customer = self._get_record_to_customer_map(dup_level)
+            unique_customers = len(set(
+                record_to_customer.get(d['record_id'], d['record_id'])
+                for d in data['decisions']
+            ))
             
             cost_per_rec = total_cost / total_records if total_records > 0 else 0
             cost_per_uniq = total_cost / unique_customers if unique_customers > 0 else 0
@@ -553,6 +619,198 @@ class DecisionQualityEvaluator:
         
         return result
     
+    # ========================================================================
+    # METRIC 7: Field Importance Analysis (H4)
+    # ========================================================================
+
+    def analyze_field_importance(self) -> Dict[str, Any]:
+        """
+        H4: Analyze which fields the agent cited most as key decision factors,
+        and whether field importance shifts as duplication level increases.
+
+        Uses the key_factors field added to the agent output schema.
+        """
+        print("\n" + "="*60)
+        print("📊 METRIC 7 (H4): Field Importance Analysis")
+        print("="*60)
+
+        field_frequency_by_level = {}
+        all_fields = set()
+
+        for dup_level, data in sorted(self.datasets.items()):
+            field_counts = Counter()
+            total_decisions = 0
+
+            for decision in data['decisions']:
+                key_factors = decision.get('key_factors', [])
+                if isinstance(key_factors, list):
+                    for field in key_factors:
+                        field_counts[field.strip()] += 1
+                    total_decisions += 1
+
+            # Normalize to frequency (proportion of decisions citing each field)
+            field_frequency = {
+                field: count / total_decisions if total_decisions > 0 else 0
+                for field, count in field_counts.items()
+            }
+            field_frequency_by_level[dup_level] = field_frequency
+            all_fields.update(field_counts.keys())
+
+            top_fields = field_counts.most_common(5)
+            print(f"  {dup_level:6s} top factors: " +
+                  ", ".join(f"{f}({c})" for f, c in top_fields))
+
+        # Identify the most consistently cited fields across all levels
+        field_total_counts = Counter()
+        for freq_map in field_frequency_by_level.values():
+            for field, freq in freq_map.items():
+                field_total_counts[field] += freq
+
+        top_fields_overall = field_total_counts.most_common(10)
+
+        # Measure stability: does the top-5 field ranking change across levels?
+        rankings_by_level = {}
+        for dup_level, freq_map in field_frequency_by_level.items():
+            rankings_by_level[dup_level] = [
+                f for f, _ in sorted(freq_map.items(), key=lambda x: -x[1])
+            ][:5]
+
+        # Rank stability score: what % of top-5 fields are consistent across levels
+        if len(rankings_by_level) > 1:
+            baseline_top5 = set(list(rankings_by_level.values())[0])
+            stability_scores = []
+            for level, ranking in list(rankings_by_level.items())[1:]:
+                overlap = len(baseline_top5 & set(ranking)) / 5
+                stability_scores.append(overlap)
+            ranking_stability = statistics.mean(stability_scores)
+        else:
+            ranking_stability = 1.0
+
+        result = {
+            'field_frequency_by_level': field_frequency_by_level,
+            'top_fields_overall': dict(top_fields_overall),
+            'rankings_by_level': rankings_by_level,
+            'ranking_stability': ranking_stability,
+            'all_fields_observed': sorted(all_fields),
+        }
+
+        print(f"\n  📈 Top fields overall: {[f for f, _ in top_fields_overall[:5]]}")
+        print(f"  ⚖️  Ranking stability across levels: {ranking_stability:.2%}")
+
+        return result
+
+    # ========================================================================
+    # METRIC 8: Segment Distortion Analysis (H6)
+    # ========================================================================
+
+    def analyze_segment_distortion(self) -> Dict[str, Any]:
+        """
+        H6: Measure whether duplication disproportionately distorts decisions
+        for specific customer segments.
+
+        Uses customer_segment field added to the agent output schema.
+        """
+        print("\n" + "="*60)
+        print("📊 METRIC 8 (H6): Segment Distortion Analysis")
+        print("="*60)
+
+        SEGMENTS = ['high_value', 'medium_value', 'low_value', 'at_risk']
+        PRIORITIES = ['HIGH_PRIORITY', 'MEDIUM_PRIORITY', 'LOW_PRIORITY']
+
+        distribution_by_segment_by_level = {}
+        segment_shift_by_level = {}
+
+        # Build baseline distribution per segment from 0% level
+        baseline_segment_dist = {}
+        if '0pct' in self.datasets:
+            for decision in self.datasets['0pct']['decisions']:
+                seg = decision.get('customer_segment')
+                if not seg:
+                    continue
+                if seg not in baseline_segment_dist:
+                    baseline_segment_dist[seg] = Counter()
+                baseline_segment_dist[seg][decision['business_decision']] += 1
+
+            # Normalize to proportions
+            for seg in baseline_segment_dist:
+                total = sum(baseline_segment_dist[seg].values())
+                baseline_segment_dist[seg] = {
+                    p: baseline_segment_dist[seg].get(p, 0) / total
+                    for p in PRIORITIES
+                }
+
+        for dup_level, data in sorted(self.datasets.items()):
+            seg_dist = {seg: Counter() for seg in SEGMENTS}
+
+            for decision in data['decisions']:
+                seg = decision.get('customer_segment')
+                if seg and seg in seg_dist:
+                    seg_dist[seg][decision['business_decision']] += 1
+
+            # Normalize
+            normalized = {}
+            for seg in SEGMENTS:
+                total = sum(seg_dist[seg].values())
+                if total > 0:
+                    normalized[seg] = {
+                        p: seg_dist[seg].get(p, 0) / total
+                        for p in PRIORITIES
+                    }
+                else:
+                    normalized[seg] = {p: 0.0 for p in PRIORITIES}
+
+            distribution_by_segment_by_level[dup_level] = normalized
+
+            # Calculate shift from baseline per segment
+            if dup_level != '0pct' and baseline_segment_dist:
+                shifts = {}
+                for seg in SEGMENTS:
+                    if seg in baseline_segment_dist:
+                        max_shift = max(
+                            abs(normalized[seg].get(p, 0) -
+                                baseline_segment_dist[seg].get(p, 0))
+                            for p in PRIORITIES
+                        )
+                        shifts[seg] = max_shift
+                segment_shift_by_level[dup_level] = shifts
+
+                print(f"  {dup_level:6s} max shift by segment: " +
+                      ", ".join(f"{s}:{v:.1%}" for s, v in shifts.items()))
+
+        # Which segment is most sensitive to duplication?
+        segment_sensitivity = {}
+        for seg in SEGMENTS:
+            shifts_for_seg = [
+                level_shifts.get(seg, 0)
+                for level_shifts in segment_shift_by_level.values()
+            ]
+            segment_sensitivity[seg] = statistics.mean(shifts_for_seg) if shifts_for_seg else 0.0
+
+        most_sensitive = max(segment_sensitivity, key=segment_sensitivity.get) if segment_sensitivity else 'unknown'
+
+        # Overall distortion score: lower = more distortion
+        avg_max_shift = statistics.mean([
+            max(shifts.values()) if shifts else 0
+            for shifts in segment_shift_by_level.values()
+        ]) if segment_shift_by_level else 0.0
+        distortion_score = 1.0 - min(avg_max_shift * 5, 1.0)
+
+        result = {
+            'distribution_by_segment_by_level': distribution_by_segment_by_level,
+            'baseline_segment_distribution': baseline_segment_dist,
+            'segment_shift_by_level': segment_shift_by_level,
+            'segment_sensitivity': segment_sensitivity,
+            'most_sensitive_segment': most_sensitive,
+            'avg_max_shift': avg_max_shift,
+            'distortion_score': distortion_score,
+        }
+
+        print(f"\n  📈 Most sensitive segment: {most_sensitive} "
+              f"(avg shift {segment_sensitivity.get(most_sensitive, 0):.2%})")
+        print(f"  ⚖️  Distortion score: {distortion_score:.2%}")
+
+        return result
+
     # ========================================================================
     # COMPOSITE DECISION QUALITY SCORE
     # ========================================================================
@@ -946,6 +1204,14 @@ class DecisionQualityEvaluator:
             "",
             self._format_boundary_section(),
             "",
+            "### 7. Field Importance (H4)",
+            "",
+            self._format_field_importance_section(),
+            "",
+            "### 8. Segment Distortion (H6)",
+            "",
+            self._format_segment_distortion_section(),
+            "",
             "---",
             "",
             "## Key Findings",
@@ -1131,6 +1397,56 @@ controls before AI agent deployment.
         
         return '\n'.join(lines)
     
+    def _format_field_importance_section(self) -> str:
+        """Format H4 field importance section"""
+        data = self.metrics['field_importance']
+        top_fields = list(data['top_fields_overall'].items())[:10]
+        lines = [
+            f"**Ranking Stability Across Duplication Levels:** {data['ranking_stability']:.2%}",
+            f"**All Fields Observed:** {', '.join(data['all_fields_observed'])}",
+            "",
+            "**Top Fields Overall (by citation frequency):**",
+            "",
+        ]
+        for field, freq in top_fields:
+            lines.append(f"- `{field}`: cited in {freq:.2f} decisions on average")
+        lines += [
+            "",
+            "**Top-5 Field Rankings by Duplication Level:**",
+            "",
+        ]
+        for level in sorted(data['rankings_by_level'].keys(),
+                           key=lambda x: int(x.replace('pct', ''))):
+            ranking = data['rankings_by_level'][level]
+            lines.append(f"- {level:6s}: {', '.join(ranking)}")
+        return '\n'.join(lines)
+
+    def _format_segment_distortion_section(self) -> str:
+        """Format H6 segment distortion section"""
+        data = self.metrics['segment_distortion']
+        lines = [
+            f"**Most Sensitive Segment:** {data['most_sensitive_segment']}",
+            f"**Avg Max Shift:** {data['avg_max_shift']:.2%}",
+            f"**Distortion Score:** {data['distortion_score']:.2%}",
+            "",
+            "**Segment Sensitivity (avg decision shift from baseline):**",
+            "",
+        ]
+        for seg, sensitivity in sorted(data['segment_sensitivity'].items(),
+                                       key=lambda x: -x[1]):
+            lines.append(f"- {seg}: {sensitivity:.2%}")
+        lines += [
+            "",
+            "**Max Decision Shift by Segment and Duplication Level:**",
+            "",
+        ]
+        for level in sorted(data['segment_shift_by_level'].keys(),
+                           key=lambda x: int(x.replace('pct', ''))):
+            shifts = data['segment_shift_by_level'][level]
+            shift_str = ", ".join(f"{s}:{v:.1%}" for s, v in shifts.items())
+            lines.append(f"- {level:6s}: {shift_str}")
+        return '\n'.join(lines)
+
     def _format_boundary_section(self) -> str:
         """Format human-agent boundary section"""
         data = self.metrics['human_agent_boundary']
@@ -1225,6 +1541,8 @@ controls before AI agent deployment.
         self.metrics['cost_efficiency'] = self.analyze_cost_efficiency()
         self.metrics['reasoning_quality'] = self.analyze_reasoning_quality()
         self.metrics['human_agent_boundary'] = self.analyze_human_agent_boundary()
+        self.metrics['field_importance'] = self.analyze_field_importance()
+        self.metrics['segment_distortion'] = self.analyze_segment_distortion()
         
         # Calculate composite score
         self.metrics['composite_score'] = self.calculate_composite_score()
@@ -1264,6 +1582,12 @@ def main():
         help='Directory containing decision files'
     )
     parser.add_argument(
+        '--cluster_map_dir',
+        type=Path,
+        default=Path('experiments_output/eval'),
+        help='Directory containing cluster map files (eval/ from data generator)'
+    )
+    parser.add_argument(
         '--output_dir',
         type=Path,
         default=Path('experiments_output/agent_results/evaluation'),
@@ -1275,7 +1599,8 @@ def main():
     # Run evaluation
     evaluator = DecisionQualityEvaluator(
         decisions_dir=args.decisions_dir,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        cluster_map_dir=args.cluster_map_dir
     )
     
     metrics = evaluator.run_evaluation()
