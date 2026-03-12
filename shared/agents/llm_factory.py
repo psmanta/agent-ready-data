@@ -56,11 +56,6 @@ class LLMFactory:
                 anthropic_api_key=api_key
             )
             
-            print(f"🔍 ChatAnthropic created. Checking client...")
-            print(f"   Has client: {hasattr(llm, '_client')}")
-            if hasattr(llm, '_client') and hasattr(llm._client, 'api_key'):
-                print(f"   Client api_key: {str(llm._client.api_key)[:20] if llm._client.api_key else 'None'}...")
-            
             return llm
         else:
             raise ValueError(

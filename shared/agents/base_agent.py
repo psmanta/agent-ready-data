@@ -82,7 +82,6 @@ class BaseExperimentAgent(ABC):
     def _initialize_llm(self):
         """Initialize LLM based on model name"""
 
-        print(f"🔍 _initialize_llm() passing api_key: {self.api_key[:20] if self.api_key else 'None'}...")
 
         
         return LLMFactory.create(
