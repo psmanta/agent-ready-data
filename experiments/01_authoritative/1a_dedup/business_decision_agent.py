@@ -287,6 +287,7 @@ def process_dataset(
     model: str = "claude-3-haiku-20240307",
     max_records: int = None,
     api_key: str = None
+    temperature: float = 0.0
 ) -> Dict[str, Any]:
     """
     Process entire dataset and generate decisions
@@ -329,7 +330,7 @@ def process_dataset(
     # Initialize agent
     agent = BusinessDecisionAgent(
         model=model,
-        temperature=0.3,
+        temperature=temperature,
         experiment_name="business_decisions",
         log_dir=output_file.parent,
         api_key=api_key
@@ -393,6 +394,7 @@ def process_dataset(
     print()
     print(f"Avg Confidence: {summary['avg_confidence']:.4f}")
     print(f"Avg Processing Time: {summary['avg_processing_time_ms']:.2f} ms")
+    print(f"Temperature: {summary['temperature']}")
     print(f"Total Cost: ${summary['total_cost_usd']:.4f}")
     print()
     
@@ -468,6 +470,14 @@ Examples:
         default=None,
         help="Maximum number of records to process (for testing)"
     )
+
+
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature (0.0 = deterministic, default: 0.0)"
+    )
     
     args = parser.parse_args()
     
@@ -495,6 +505,7 @@ Examples:
             model=args.model,
             max_records=args.max_records,
             api_key=api_key
+            temperature=args.temperature
         )
         
         return 0
