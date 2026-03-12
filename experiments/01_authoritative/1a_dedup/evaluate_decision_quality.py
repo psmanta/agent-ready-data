@@ -112,7 +112,7 @@ class DecisionQualityEvaluator:
         decisions = self.datasets.get(dup_level, {}).get('decisions', [])
         return {d['record_id']: d['record_id'] for d in decisions}
 
-
+    def _load_all_datasets(self) -> Dict[str, Any]:
         """Load all decision files"""
         datasets = {}
         

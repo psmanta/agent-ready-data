@@ -10,7 +10,7 @@ Usage:
     python business_decision_agent.py \
         --input experiments_output/agent/customers_dup_50pct.jsonl \
         --output experiments_output/agent_results/decisions/customers_dup_50pct.decisions.jsonl \
-        --model claude-3-haiku-20240307
+        --model claude-haiku-4-5-20251001
 """
 
 import argparse
@@ -35,7 +35,8 @@ from agents.base_agent import BaseExperimentAgent
 
 # Load .env file with override
 from dotenv import load_dotenv
-load_dotenv(override=True)
+load_dotenv(dotenv_path=project_root / ".env", override=True)
+
 
 # ============================================================================
 # SYSTEM PROMPT (Guided but Not Prescriptive)
@@ -143,8 +144,8 @@ class BusinessDecisionAgent(BaseExperimentAgent):
     
     def __init__(
         self,
-        model: str = "claude-3-haiku-20240307",
-        temperature: float = 0.3,
+        model: str = "claude-haiku-4-5-20251001",
+        temperature: float = 0.0,
         max_tokens: int = 1024,
         experiment_name: str = "business_decisions",
         log_dir: Path = None,
@@ -469,14 +470,9 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        default="claude-3-haiku-20240307",
-        choices=[
-            "claude-3-opus-20240229",
-            "claude-3-sonnet-20240229",
-            "claude-3-haiku-20240307",
-            "claude-3-5-sonnet-20241022"
-        ],
-        help="Anthropic Claude model to use (default: claude-3-haiku-20240307)"
+        default="claude-haiku-4-5-20251001",
+        help="Anthropic Claude model to use (default: claude-haiku-4-5-20251001). "
+             "Available models defined in shared/agents/model_pricing.json"
     )
     
     parser.add_argument(
