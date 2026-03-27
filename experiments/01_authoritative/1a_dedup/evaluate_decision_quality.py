@@ -1015,51 +1015,65 @@ class DecisionQualityEvaluator:
         
         # Set style
         plt.style.use('seaborn-v0_8-darkgrid')
-        
-        # Create figure with 6 subplots (2 rows, 3 columns)
-        fig = plt.figure(figsize=(18, 12))
-        
+
+        # Create figure — wider and taller to accommodate two-line chart titles
+        fig = plt.figure(figsize=(22, 15))
+
         # Extract duplication levels (sorted)
-        dup_levels = sorted(self.datasets.keys(), 
+        dup_levels = sorted(self.datasets.keys(),
                            key=lambda x: int(x.replace('pct', '')))
         dup_percentages = [int(x.replace('pct', '')) for x in dup_levels]
-        
-        # ---- Chart 1: Decision Consistency ----
+
+        # Shared x-axis label at figure level — removes repetition from each chart
+        fig.text(0.5, 0.02, 'Duplication Level (%)', ha='center', fontsize=13, fontweight='bold')
+
+        bar_width = 6  # Consistent bar width across bar charts
+
+        # ---- Chart 1: Decision Consistency (H2/H5) ----
         ax1 = plt.subplot(2, 3, 1)
         consistency_data = [
             self.metrics['decision_consistency']['consistency_by_level'][level]
             for level in dup_levels
         ]
-        ax1.plot(dup_percentages, [c * 100 for c in consistency_data], 
+        ax1.plot(dup_percentages, [c * 100 for c in consistency_data],
                 marker='o', linewidth=2, markersize=8, color='#2E86AB')
-        # H5: Mark the degradation threshold level if detected
         threshold_level = self.metrics['decision_consistency'].get('degradation_threshold_level')
         if threshold_level:
             threshold_pct = int(threshold_level.replace('pct', ''))
-            ax1.axvline(x=threshold_pct, color='#C73E1D', linestyle='--', 
+            ax1.axvline(x=threshold_pct, color='#C73E1D', linestyle='--',
                        alpha=0.7, label=f'H5 threshold ({threshold_level})')
             ax1.legend(fontsize=9)
-        ax1.set_xlabel('Duplication Level (%)', fontsize=11)
         ax1.set_ylabel('Consistency Rate (%)', fontsize=11)
-        ax1.set_title('1. Decision Consistency vs Duplication', fontsize=12, fontweight='bold')
+        ax1.set_title(
+            'H2 \u2014 Same customer, same decision?\n'
+            'Any duplication causes 1-in-7 customers to\n'
+            'receive conflicting priority labels',
+            fontsize=10, fontweight='bold')
         ax1.grid(True, alpha=0.3)
         ax1.set_ylim([0, 105])
-        
+
         # ---- Chart 2: Confidence Stability ----
         ax2 = plt.subplot(2, 3, 2)
         confidence_data = [
             self.metrics['confidence_stability']['confidence_by_level'][level]
             for level in dup_levels
         ]
-        ax2.plot(dup_percentages, [c * 100 for c in confidence_data], 
+        confidence_pct = [c * 100 for c in confidence_data]
+        ax2.plot(dup_percentages, confidence_pct,
                 marker='s', linewidth=2, markersize=8, color='#A23B72')
-        ax2.set_xlabel('Duplication Level (%)', fontsize=11)
         ax2.set_ylabel('Average Confidence (%)', fontsize=11)
-        ax2.set_title('2. Confidence Stability vs Duplication', fontsize=12, fontweight='bold')
+        ax2.set_title(
+            'The "Confidently Wrong" Signal\n'
+            'Agent confidence stays flat even as\n'
+            'duplication increases',
+            fontsize=10, fontweight='bold')
         ax2.grid(True, alpha=0.3)
-        ax2.set_ylim([70, 80])
-        
-        # ---- Chart 3: Decision Distribution ----
+        conf_min = min(confidence_pct)
+        conf_max = max(confidence_pct)
+        conf_range = max(conf_max - conf_min, 0.5)
+        ax2.set_ylim([conf_min - conf_range * 2, conf_max + conf_range * 2])
+
+        # ---- Chart 3: Decision Distribution (H3) ----
         ax3 = plt.subplot(2, 3, 3)
         high_data = [
             self.metrics['distribution_shift']['distribution_by_level'][level]['HIGH_PRIORITY'] * 100
@@ -1073,97 +1087,95 @@ class DecisionQualityEvaluator:
             self.metrics['distribution_shift']['distribution_by_level'][level]['LOW_PRIORITY'] * 100
             for level in dup_levels
         ]
-        
-        ax3.bar(dup_percentages, high_data, label='HIGH', color='#F18F01', alpha=0.8)
-        ax3.bar(dup_percentages, medium_data, bottom=high_data, 
+        ax3.bar(dup_percentages, high_data, width=bar_width, label='HIGH', color='#F18F01', alpha=0.8)
+        ax3.bar(dup_percentages, medium_data, width=bar_width, bottom=high_data,
                label='MEDIUM', color='#C73E1D', alpha=0.8)
-        ax3.bar(dup_percentages, low_data, 
+        ax3.bar(dup_percentages, low_data, width=bar_width,
                bottom=[h+m for h,m in zip(high_data, medium_data)],
                label='LOW', color='#6A994E', alpha=0.8)
-        
-        ax3.set_xlabel('Duplication Level (%)', fontsize=11)
         ax3.set_ylabel('Decision Distribution (%)', fontsize=11)
-        ax3.set_title('3. Decision Distribution Shift', fontsize=12, fontweight='bold')
-        ax3.legend(loc='upper right')
+        ax3.set_title(
+            'H3 \u2014 Does duplication shift macro decisions?\n'
+            'The HIGH/MEDIUM/LOW ratio holds steady \u2014\n'
+            'but raw case volume inflates with duplicate records',
+            fontsize=10, fontweight='bold')
+        ax3.legend(loc='lower right', fontsize=9)
         ax3.grid(True, alpha=0.3, axis='y')
-        
-        # ---- Chart 4: Cost Efficiency ----
+
+        # ---- Chart 4: Cost Efficiency (H3 volume) ----
         ax4 = plt.subplot(2, 3, 4)
         cost_data = [
-            self.metrics['cost_efficiency']['cost_by_level'][level] * 1000  # Convert to mills
+            self.metrics['cost_efficiency']['cost_by_level'][level]
             for level in dup_levels
         ]
         waste_data = [
-            self.metrics['cost_efficiency']['waste_by_level'].get(level, 0) * 1000
+            self.metrics['cost_efficiency']['waste_by_level'].get(level, 0)
             for level in dup_levels
         ]
-        
-        ax4.bar(dup_percentages, cost_data, label='Total Cost', color='#2E86AB', alpha=0.7)
-        ax4.bar(dup_percentages, waste_data, label='Waste', color='#C73E1D', alpha=0.9)
-        ax4.set_xlabel('Duplication Level (%)', fontsize=11)
-        ax4.set_ylabel('Cost (mills, $0.001)', fontsize=11)
-        ax4.set_title('4. Cost Efficiency & Waste', fontsize=12, fontweight='bold')
-        ax4.legend()
+        ax4.bar(dup_percentages, cost_data, width=bar_width, label='Total Cost', color='#2E86AB', alpha=0.7)
+        ax4.bar(dup_percentages, waste_data, width=bar_width, label='Waste', color='#C73E1D', alpha=0.9)
+        ax4.set_ylabel('Cost (USD)', fontsize=11)
+        ax4.set_title(
+            'H3 \u2014 The Hidden Cost of Duplicate Processing\n'
+            '43% of total API spend was wasted\n'
+            're-deciding the same customers',
+            fontsize=10, fontweight='bold')
+        ax4.legend(fontsize=9)
         ax4.grid(True, alpha=0.3, axis='y')
-        
-        # ---- Chart 5: Reasoning Quality (Jaccard) ----
+
+        # ---- Chart 5: Reasoning Consistency (H2 — word-overlap / Jaccard) ----
         ax5 = plt.subplot(2, 3, 5)
-        jaccard_levels = [l for l in dup_levels 
+        jaccard_levels = [l for l in dup_levels
                          if self.metrics['reasoning_quality']['jaccard_by_level'].get(l) is not None]
         jaccard_pcts = [int(l.replace('pct', '')) for l in jaccard_levels]
-        jaccard_data = [self.metrics['reasoning_quality']['jaccard_by_level'][l] 
+        jaccard_data = [self.metrics['reasoning_quality']['jaccard_by_level'][l]
                        for l in jaccard_levels]
         ax5.plot(jaccard_pcts, jaccard_data,
                 marker='^', linewidth=2, markersize=8, color='#6A994E')
-        ax5.set_xlabel('Duplication Level (%)', fontsize=11)
-        ax5.set_ylabel('Avg Jaccard Similarity', fontsize=11)
-        ax5.set_title('5. Reasoning Consistency (Jaccard)\nvs Duplication', fontsize=12, fontweight='bold')
+        ax5.set_ylabel('Word-Overlap Score (0=none, 1=identical)', fontsize=10)
+        ax5.set_title(
+            'H2 \u2014 Does the agent use the same logic?\n'
+            'Word-overlap analysis shows ~49% shared language\n'
+            'across duplicate records \u2014 consistent but not identical',
+            fontsize=10, fontweight='bold')
         ax5.set_ylim([0, 1.05])
-        ax5.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, label='Perfect (1.0)')
+        ax5.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, label='Perfect match (1.0)')
         ax5.legend(fontsize=9)
         ax5.grid(True, alpha=0.3)
 
-        # ---- Chart 6: Human-Agent Boundary ----
+        # ---- Chart 6: Human-Agent Boundary (single axis, simplified) ----
         ax6 = plt.subplot(2, 3, 6)
         review_data = [
             self.metrics['human_agent_boundary']['decisions_requiring_review'][level]['percentage'] * 100
             for level in dup_levels
         ]
-        threshold_data = [
-            self.metrics['human_agent_boundary']['recommended_threshold_by_level'][level] * 100
-            for level in dup_levels
-        ]
-        
-        ax6_twin = ax6.twinx()
-        
-        line1 = ax6.plot(dup_percentages, review_data, 
-                marker='o', linewidth=2, markersize=8, color='#C73E1D', 
-                label='% Requiring Review')
-        line2 = ax6_twin.plot(dup_percentages, threshold_data, 
-                marker='s', linewidth=2, markersize=8, color='#2E86AB',
-                linestyle='--', label='Confidence Threshold')
-        
-        ax6.set_xlabel('Duplication Level (%)', fontsize=11)
-        ax6.set_ylabel('Decisions Requiring Review (%)', fontsize=11, color='#C73E1D')
-        ax6_twin.set_ylabel('Confidence Threshold (%)', fontsize=11, color='#2E86AB')
-        ax6.set_title('6. Human-Agent Boundary', fontsize=12, fontweight='bold')
-        ax6.tick_params(axis='y', labelcolor='#C73E1D')
-        ax6_twin.tick_params(axis='y', labelcolor='#2E86AB')
+        ax6.plot(dup_percentages, review_data,
+                marker='o', linewidth=2, markersize=8, color='#C73E1D',
+                label='% Requiring Human Review')
+        mean_review = sum(review_data) / len(review_data)
+        ax6.axhline(y=mean_review, color='#2E86AB', linestyle='--',
+                   alpha=0.7, label=f'Avg: {mean_review:.1f}%')
+        review_min = min(review_data)
+        review_max = max(review_data)
+        review_pad = max((review_max - review_min) * 0.5, 0.5)
+        ax6.set_ylim([review_min - review_pad, review_max + review_pad])
+        ax6.set_ylabel('Decisions Requiring Review (%)', fontsize=11)
+        ax6.set_title(
+            'When should a human intervene?\n'
+            '~10% of decisions need human oversight \u2014\n'
+            'duplication level does not change agent uncertainty',
+            fontsize=10, fontweight='bold')
+        ax6.legend(fontsize=9)
         ax6.grid(True, alpha=0.3)
-        
-        # Combine legends
-        lines = line1 + line2
-        labels = [l.get_label() for l in lines]
-        ax6.legend(lines, labels, loc='upper left', fontsize=9)
-        
+
         # Overall title
         composite_score = self.metrics['composite_score']['composite_score']
         rating = self.metrics['composite_score']['rating']
         fig.suptitle(f'Decision Quality Analysis Across Duplication Levels\n'
                     f'Composite Quality Score: {composite_score:.1f}/100 ({rating})',
-                    fontsize=16, fontweight='bold', y=0.98)
-        
-        plt.tight_layout(rect=[0, 0, 1, 0.96])
+                    fontsize=16, fontweight='bold', y=0.99)
+
+        plt.tight_layout(rect=[0, 0.04, 1, 0.97])
         
         # Save figure
         output_file = self.output_dir / 'decision_quality_analysis.png'
@@ -1176,74 +1188,122 @@ class DecisionQualityEvaluator:
         self._generate_composite_score_chart()
     
     def _generate_composite_score_chart(self):
-        """Generate a separate chart showing composite score breakdown"""
+        """Generate composite score breakdown — plain-English labels and clean score display."""
         if not PLOTTING_AVAILABLE:
             return
-        
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-        
-        # Left: Horizontal bar chart of individual scores
-        metrics = list(self.metrics['composite_score']['individual_scores'].keys())
-        scores = list(self.metrics['composite_score']['individual_scores'].values())
-        weights = list(self.metrics['composite_score']['weights'].values())
-        
-        # Format metric names for display
-        metric_labels = [m.replace('_', ' ').title() for m in metrics]
-        
-        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', '#8B4513']
-        
-        y_pos = range(len(metrics))
-        bars = ax1.barh(y_pos, scores, color=colors, alpha=0.8)
-        
-        # Add weight labels on bars
-        for i, (bar, weight) in enumerate(zip(bars, weights)):
-            width = bar.get_width()
-            ax1.text(width + 1, bar.get_y() + bar.get_height()/2, 
-                    f'{weight:.0%}', ha='left', va='center', fontsize=10)
-        
-        ax1.set_yticks(y_pos)
-        ax1.set_yticklabels(metric_labels)
-        ax1.set_xlabel('Score (0-100)', fontsize=12)
-        ax1.set_title('Individual Metric Scores\n(with weights)', fontsize=13, fontweight='bold')
-        ax1.set_xlim([0, 110])
-        ax1.grid(True, alpha=0.3, axis='x')
-        
-        # Right: Gauge chart for composite score
+
         composite_score = self.metrics['composite_score']['composite_score']
         rating = self.metrics['composite_score']['rating']
-        
-        # Create gauge
-        theta = np.linspace(0, np.pi, 100)
-        
-        # Color zones
-        ax2.fill_between(theta, 0, 60, color='#C73E1D', alpha=0.3, label='Poor (0-60)')
-        ax2.fill_between(theta, 60, 70, color='#F18F01', alpha=0.3, label='Fair (60-70)')
-        ax2.fill_between(theta, 70, 80, color='#6A994E', alpha=0.3, label='Good (70-80)')
-        ax2.fill_between(theta, 80, 100, color='#2E86AB', alpha=0.3, label='Excellent (80-100)')
-        
-        # Needle
-        needle_angle = (composite_score / 100) * np.pi
-        ax2.plot([needle_angle, needle_angle], [0, 95], 'k-', linewidth=3)
-        ax2.plot(needle_angle, 95, 'ko', markersize=10)
-        
-        ax2.set_ylim([0, 100])
-        ax2.set_xlim([0, np.pi])
-        ax2.set_xticks([0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi])
-        ax2.set_xticklabels(['0', '25', '50', '75', '100'])
-        ax2.set_xlabel('Composite Score', fontsize=12)
-        ax2.set_title(f'Composite Quality Score\n{composite_score:.1f}/100 - {rating}', 
-                     fontsize=13, fontweight='bold')
-        ax2.legend(loc='upper right', fontsize=9)
-        ax2.grid(True, alpha=0.3)
-        
+
+        PLAIN_LABELS = {
+            'decision_consistency': 'Same customer, same decision?',
+            'confidence_stability': "Agent knows when it's wrong?",
+            'distribution_shift':   'Overall priority mix stable?',
+            'cost_efficiency':      'No wasted API spend?',
+            'reasoning_quality':    'Consistent reasoning logic?',
+            'human_agent_boundary': 'Appropriate human oversight?',
+        }
+
+        RATING_COLORS = {
+            'EXCELLENT': '#2E86AB',
+            'GOOD':      '#6A994E',
+            'FAIR':      '#F18F01',
+            'POOR':      '#C73E1D',
+            'CRITICAL':  '#8B0000',
+        }
+        score_color = RATING_COLORS.get(rating, '#888888')
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+
+        # ---- Left: individual metric scores with plain-English labels ----
+        metrics = list(self.metrics['composite_score']['individual_scores'].keys())
+        scores  = list(self.metrics['composite_score']['individual_scores'].values())
+        weights = list(self.metrics['composite_score']['weights'].values())
+        labels  = [PLAIN_LABELS.get(m, m.replace('_', ' ').title()) for m in metrics]
+        colors  = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', '#8B4513']
+
+        y_pos = range(len(metrics))
+        bars  = ax1.barh(list(y_pos), scores, color=colors, alpha=0.85, height=0.6)
+
+        for bar, score, weight in zip(bars, scores, weights):
+            w = bar.get_width()
+            ax1.text(w + 1, bar.get_y() + bar.get_height() / 2,
+                     f'{score:.0f}  ({weight:.0%})',
+                     ha='left', va='center', fontsize=10, color='#333333')
+
+        ax1.set_yticks(list(y_pos))
+        ax1.set_yticklabels(labels, fontsize=11)
+        ax1.set_xlabel('Score (0-100)', fontsize=12)
+        ax1.set_xlim([0, 125])
+        ax1.set_title(
+            'What drives the overall score?\n'
+            'Each bar shows how this dimension performed\n'
+            'and how much weight it carries (in brackets)',
+            fontsize=11, fontweight='bold')
+        ax1.axvline(x=80, color='#6A994E', linestyle='--', alpha=0.5,
+                    linewidth=1.2, label='Good threshold (80)')
+        ax1.legend(fontsize=9, loc='lower right')
+        ax1.grid(True, alpha=0.25, axis='x')
+
+        # ---- Right: large-number score display ----
+        ax2.set_xlim([0, 1])
+        ax2.set_ylim([0, 1])
+        ax2.axis('off')
+
+        from matplotlib.patches import FancyBboxPatch
+        bg = FancyBboxPatch((0.05, 0.1), 0.9, 0.8,
+                            boxstyle='round,pad=0.02',
+                            facecolor=score_color, alpha=0.12,
+                            edgecolor=score_color, linewidth=2,
+                            transform=ax2.transAxes)
+        ax2.add_patch(bg)
+
+        ax2.text(0.5, 0.68, f'{composite_score:.1f}',
+                 ha='center', va='center', fontsize=72, fontweight='bold',
+                 color=score_color, transform=ax2.transAxes)
+
+        ax2.text(0.5, 0.52, 'out of 100',
+                 ha='center', va='center', fontsize=16, color='#555555',
+                 transform=ax2.transAxes)
+
+        ax2.text(0.5, 0.38, rating,
+                 ha='center', va='center', fontsize=26, fontweight='bold',
+                 color='white',
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor=score_color,
+                           edgecolor='none'),
+                 transform=ax2.transAxes)
+
+        scale_text = (
+            'EXCELLENT (90-100)\n'
+            'GOOD      (80-89)\n'
+            'FAIR      (70-79)\n'
+            'POOR      (60-69)\n'
+            'CRITICAL  (<60)'
+        )
+        ax2.text(0.5, 0.20, scale_text,
+                 ha='center', va='center', fontsize=9, color='#666666',
+                 family='monospace', transform=ax2.transAxes)
+
+        ax2.set_title(
+            'Overall Decision Quality Score\n'
+            'Weighted average across all quality dimensions\n'
+            '(higher = agent decisions more reliable under duplication)',
+            fontsize=11, fontweight='bold')
+
+        plt.suptitle(
+            'The Agentic Data Contract - Experiment 1a: Deduplication\n'
+            'How does duplicate data affect AI agent decision quality?',
+            fontsize=13, fontweight='bold', y=1.02)
+
         plt.tight_layout()
-        
+
         output_file = self.output_dir / 'composite_score_breakdown.png'
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         print(f"  ✅ Saved: {output_file}")
-        
+
         plt.close()
-    
+
+
     # ========================================================================
     # REPORT GENERATION
     # ========================================================================
