@@ -230,15 +230,45 @@ class DecisionQualityEvaluator:
         
         # Calculate overall consistency (weighted by number of duplicates)
         overall_consistency = statistics.mean(consistency_by_level.values())
-        
+
+        # H5: Threshold detection
+        # Find the first duplication level where consistency drops more than 2 percentage
+        # points from the previous level. This identifies the "cliff edge" — the point
+        # at which duplication starts meaningfully degrading decision quality.
+        # We use 2pp as the threshold because it represents a detectable, non-trivial
+        # degradation that would be actionable for a data quality team.
+        sorted_levels = sorted(
+            [l for l in consistency_by_level if l != '0pct'],
+            key=lambda x: int(x.replace('pct', ''))
+        )
+        degradation_threshold_level = None
+        prev_consistency = consistency_by_level.get('0pct', 1.0)
+        degradation_by_level = {}
+        for level in sorted_levels:
+            current = consistency_by_level[level]
+            drop = prev_consistency - current
+            degradation_by_level[level] = drop
+            if drop > 0.02 and degradation_threshold_level is None:
+                degradation_threshold_level = level
+            prev_consistency = current
+
+        if degradation_threshold_level:
+            print(f"\n  ⚠️  H5 Threshold: Meaningful degradation first detected at "
+                  f"{degradation_threshold_level} "
+                  f"(drop of {degradation_by_level[degradation_threshold_level]:.2%})")
+        else:
+            print(f"\n  ✅ H5 Threshold: No meaningful degradation detected across all levels")
+
         result = {
             'consistency_by_level': consistency_by_level,
             'inconsistent_examples': all_inconsistencies[:10],  # First 10 examples
             'total_inconsistencies': len(all_inconsistencies),
             'overall_consistency': overall_consistency,
+            'degradation_by_level': degradation_by_level,
+            'degradation_threshold_level': degradation_threshold_level,
             'metric_score': overall_consistency * 100  # 0-100 scale
         }
-        
+
         print(f"\n  📈 Overall Consistency: {overall_consistency:.2%}")
         print(f"  ⚠️  Total Inconsistencies: {len(all_inconsistencies)}")
         
@@ -475,74 +505,125 @@ class DecisionQualityEvaluator:
 
 
     # ========================================================================
-    # METRIC 5: Reasoning Quality
+    # METRIC 5: Reasoning Quality (Jaccard Similarity)
     # ========================================================================
     
     def analyze_reasoning_quality(self) -> Dict[str, Any]:
         """
-        Assess quality of decision reasoning/explanations
-        
+        Measure reasoning consistency within duplicate clusters using Jaccard similarity.
+
+        For each pair of duplicate records belonging to the same customer, we compute
+        the Jaccard similarity of their reasoning texts:
+
+            Jaccard(A, B) = |words(A) ∩ words(B)| / |words(A) ∪ words(B)|
+
+        A score of 1.0 means the agent used identical language for both records.
+        A score of 0.0 means no shared content whatsoever.
+
+        We filter common English stop words before comparison so that shared filler
+        phrases ("the customer has", "based on the") don't inflate scores artificially.
+
+        This metric is tied directly to H2: if the agent makes consistent *decisions*
+        for duplicate records but gives wildly different *reasoning*, that is a deeper
+        failure of coherence than the decision label alone captures.
+
+        Methodology note: Jaccard similarity was chosen over LLM-based semantic
+        similarity to keep the metric deterministic and reproducible. The same inputs
+        will always produce the same score, with no AI variability or API cost.
+
         Returns:
             {
-                'avg_reasoning_length_by_level': {...},
-                'reasoning_keywords_by_level': {...},
-                'quality_score': 0.85
+                'jaccard_by_level': {'10pct': 0.72, ...},
+                'avg_jaccard_overall': 0.68,
+                'quality_score': 0.68,   # same as avg_jaccard
+                'metric_score': 68.0
             }
         """
         print("\n" + "="*60)
-        print("📊 METRIC 5: Reasoning Quality Analysis")
+        print("📊 METRIC 5: Reasoning Quality (Jaccard Similarity)")
         print("="*60)
-        
-        reasoning_length_by_level = {}
-        reasoning_keywords_by_level = {}
-        
-        # Keywords that indicate quality reasoning
-        quality_keywords = [
-            'however', 'although', 'because', 'therefore', 'indicates',
-            'suggests', 'demonstrates', 'based on', 'given that', 'considering'
-        ]
-        
+        print("  Method: Jaccard similarity of reasoning text within duplicate clusters")
+        print("  (Deterministic, no LLM involvement — same inputs always yield same score)")
+
+        # Common English stop words to filter before comparison
+        STOP_WORDS = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+            'has', 'have', 'had', 'this', 'that', 'these', 'those', 'it', 'its',
+            'as', 'their', 'they', 'them', 'there', 'which', 'who', 'will', 'would',
+            'could', 'should', 'may', 'might', 'also', 'not', 'no', 'so', 'if',
+            'than', 'more', 'very', 'all', 'both', 'each', 'any', 'some', 'such'
+        }
+
+        def tokenize(text: str) -> set:
+            """Lowercase, strip punctuation, remove stop words"""
+            import re
+            words = re.findall(r'\b[a-z]+\b', text.lower())
+            return {w for w in words if w not in STOP_WORDS}
+
+        def jaccard(set_a: set, set_b: set) -> float:
+            if not set_a and not set_b:
+                return 1.0
+            intersection = len(set_a & set_b)
+            union = len(set_a | set_b)
+            return intersection / union if union > 0 else 0.0
+
+        jaccard_by_level = {}
+        pair_counts_by_level = {}
+
         for dup_level, data in sorted(self.datasets.items()):
-            reasonings = [d.get('decision_reasoning', '') for d in data['decisions']]
-            
-            # Average reasoning length
-            avg_length = statistics.mean([len(r.split()) for r in reasonings])
-            reasoning_length_by_level[dup_level] = avg_length
-            
-            # Count quality keywords
-            keyword_counts = Counter()
-            for reasoning in reasonings:
-                reasoning_lower = reasoning.lower()
-                for keyword in quality_keywords:
-                    if keyword in reasoning_lower:
-                        keyword_counts[keyword] += 1
-            
-            reasoning_keywords_by_level[dup_level] = dict(keyword_counts)
-            
-            total_keywords = sum(keyword_counts.values())
-            keywords_per_decision = total_keywords / len(reasonings) if reasonings else 0
-            
-            print(f"  {dup_level:6s}: {avg_length:.1f} words/reasoning, "
-                  f"{keywords_per_decision:.2f} quality keywords/decision")
-        
-        # Calculate quality score based on consistency of reasoning length
-        baseline_length = reasoning_length_by_level.get('0pct', 50)
-        length_variance = statistics.stdev(reasoning_length_by_level.values())
-        quality_score = 1.0 - min(length_variance / baseline_length, 1.0)
-        
+            if dup_level == '0pct':
+                # No duplicates at baseline — skip, metric starts at 10%
+                continue
+
+            record_to_customer = self._get_record_to_customer_map(dup_level)
+
+            # Group reasoning by customer_id
+            customer_reasonings = defaultdict(list)
+            for decision in data['decisions']:
+                record_id = decision['record_id']
+                customer_id = record_to_customer.get(record_id, record_id)
+                reasoning = decision.get('decision_reasoning', '')
+                if reasoning:
+                    customer_reasonings[customer_id].append(tokenize(reasoning))
+
+            # Compute pairwise Jaccard for all duplicate clusters
+            pair_scores = []
+            for customer_id, token_sets in customer_reasonings.items():
+                if len(token_sets) < 2:
+                    continue
+                # All unique pairs within the cluster
+                for i in range(len(token_sets)):
+                    for j in range(i + 1, len(token_sets)):
+                        pair_scores.append(jaccard(token_sets[i], token_sets[j]))
+
+            if pair_scores:
+                avg_jaccard = statistics.mean(pair_scores)
+                jaccard_by_level[dup_level] = avg_jaccard
+                pair_counts_by_level[dup_level] = len(pair_scores)
+                print(f"  {dup_level:6s}: Jaccard={avg_jaccard:.3f} "
+                      f"({len(pair_scores)} pairs evaluated)")
+            else:
+                jaccard_by_level[dup_level] = None
+                pair_counts_by_level[dup_level] = 0
+                print(f"  {dup_level:6s}: No duplicate pairs found")
+
+        valid_scores = [s for s in jaccard_by_level.values() if s is not None]
+        avg_jaccard_overall = statistics.mean(valid_scores) if valid_scores else 0.0
+        quality_score = avg_jaccard_overall
+
         result = {
-            'avg_reasoning_length_by_level': reasoning_length_by_level,
-            'reasoning_keywords_by_level': reasoning_keywords_by_level,
-            'baseline_length': baseline_length,
-            'length_variance': length_variance,
+            'jaccard_by_level': jaccard_by_level,
+            'pair_counts_by_level': pair_counts_by_level,
+            'avg_jaccard_overall': avg_jaccard_overall,
             'quality_score': quality_score,
             'metric_score': quality_score * 100  # 0-100 scale
         }
-        
-        print(f"\n  📈 Baseline Reasoning Length: {baseline_length:.1f} words")
-        print(f"  📊 Length Variance: {length_variance:.2f}")
+
+        print(f"\n  📈 Avg Jaccard Similarity: {avg_jaccard_overall:.3f}")
         print(f"  ⚖️  Quality Score: {quality_score:.2%}")
-        
+        print(f"  ℹ️  Score interpretation: 1.0=identical reasoning, 0.0=no shared content")
+
         return result
     
     # ========================================================================
@@ -669,17 +750,21 @@ class DecisionQualityEvaluator:
         top_fields_overall = field_total_counts.most_common(10)
 
         # Measure stability: does the top-5 field ranking change across levels?
+        # We explicitly anchor to 0pct as the baseline rather than relying on
+        # dict ordering, to ensure we always compare against the clean data state.
         rankings_by_level = {}
         for dup_level, freq_map in field_frequency_by_level.items():
             rankings_by_level[dup_level] = [
                 f for f, _ in sorted(freq_map.items(), key=lambda x: -x[1])
             ][:5]
 
-        # Rank stability score: what % of top-5 fields are consistent across levels
-        if len(rankings_by_level) > 1:
-            baseline_top5 = set(list(rankings_by_level.values())[0])
+        # Rank stability score: what % of top-5 fields are consistent vs 0pct baseline
+        baseline_top5 = set(rankings_by_level.get('0pct', []))
+        if baseline_top5 and len(rankings_by_level) > 1:
             stability_scores = []
-            for level, ranking in list(rankings_by_level.items())[1:]:
+            for level, ranking in rankings_by_level.items():
+                if level == '0pct':
+                    continue
                 overlap = len(baseline_top5 & set(ranking)) / 5
                 stability_scores.append(overlap)
             ranking_stability = statistics.mean(stability_scores)
@@ -742,10 +827,38 @@ class DecisionQualityEvaluator:
         for dup_level, data in sorted(self.datasets.items()):
             seg_dist = {seg: Counter() for seg in SEGMENTS}
 
+            # Deduplicate by customer_id before counting segment distributions.
+            # Without this, segments with more duplicates appear to have more records,
+            # inflating their apparent share and contaminating the shift measurement.
+            # We take the majority-vote decision per customer; ties go to the
+            # higher-priority category (HIGH > MEDIUM > LOW).
+            record_to_customer = self._get_record_to_customer_map(dup_level)
+            customer_decisions_for_seg = defaultdict(list)
+            customer_segment_map = {}
+
             for decision in data['decisions']:
+                record_id = decision['record_id']
+                customer_id = record_to_customer.get(record_id, record_id)
                 seg = decision.get('customer_segment')
-                if seg and seg in seg_dist:
-                    seg_dist[seg][decision['business_decision']] += 1
+                customer_decisions_for_seg[customer_id].append(
+                    decision['business_decision']
+                )
+                if seg:
+                    customer_segment_map[customer_id] = seg
+
+            PRIORITY_ORDER = ['HIGH_PRIORITY', 'MEDIUM_PRIORITY', 'LOW_PRIORITY']
+
+            for customer_id, dec_list in customer_decisions_for_seg.items():
+                seg = customer_segment_map.get(customer_id)
+                if not seg or seg not in seg_dist:
+                    continue
+                # Majority vote; tie-break toward higher priority
+                vote = Counter(dec_list)
+                majority = max(
+                    PRIORITY_ORDER,
+                    key=lambda p: (vote.get(p, 0), -PRIORITY_ORDER.index(p))
+                )
+                seg_dist[seg][majority] += 1
 
             # Normalize
             normalized = {}
@@ -919,6 +1032,13 @@ class DecisionQualityEvaluator:
         ]
         ax1.plot(dup_percentages, [c * 100 for c in consistency_data], 
                 marker='o', linewidth=2, markersize=8, color='#2E86AB')
+        # H5: Mark the degradation threshold level if detected
+        threshold_level = self.metrics['decision_consistency'].get('degradation_threshold_level')
+        if threshold_level:
+            threshold_pct = int(threshold_level.replace('pct', ''))
+            ax1.axvline(x=threshold_pct, color='#C73E1D', linestyle='--', 
+                       alpha=0.7, label=f'H5 threshold ({threshold_level})')
+            ax1.legend(fontsize=9)
         ax1.set_xlabel('Duplication Level (%)', fontsize=11)
         ax1.set_ylabel('Consistency Rate (%)', fontsize=11)
         ax1.set_title('1. Decision Consistency vs Duplication', fontsize=12, fontweight='bold')
@@ -986,17 +1106,21 @@ class DecisionQualityEvaluator:
         ax4.legend()
         ax4.grid(True, alpha=0.3, axis='y')
         
-        # ---- Chart 5: Reasoning Quality ----
+        # ---- Chart 5: Reasoning Quality (Jaccard) ----
         ax5 = plt.subplot(2, 3, 5)
-        reasoning_length_data = [
-            self.metrics['reasoning_quality']['avg_reasoning_length_by_level'][level]
-            for level in dup_levels
-        ]
-        ax5.plot(dup_percentages, reasoning_length_data, 
+        jaccard_levels = [l for l in dup_levels 
+                         if self.metrics['reasoning_quality']['jaccard_by_level'].get(l) is not None]
+        jaccard_pcts = [int(l.replace('pct', '')) for l in jaccard_levels]
+        jaccard_data = [self.metrics['reasoning_quality']['jaccard_by_level'][l] 
+                       for l in jaccard_levels]
+        ax5.plot(jaccard_pcts, jaccard_data,
                 marker='^', linewidth=2, markersize=8, color='#6A994E')
         ax5.set_xlabel('Duplication Level (%)', fontsize=11)
-        ax5.set_ylabel('Avg Reasoning Length (words)', fontsize=11)
-        ax5.set_title('5. Reasoning Quality vs Duplication', fontsize=12, fontweight='bold')
+        ax5.set_ylabel('Avg Jaccard Similarity', fontsize=11)
+        ax5.set_title('5. Reasoning Consistency (Jaccard)\nvs Duplication', fontsize=12, fontweight='bold')
+        ax5.set_ylim([0, 1.05])
+        ax5.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, label='Perfect (1.0)')
+        ax5.legend(fontsize=9)
         ax5.grid(True, alpha=0.3)
 
         # ---- Chart 6: Human-Agent Boundary ----
@@ -1299,20 +1423,25 @@ controls before AI agent deployment.
     def _format_consistency_section(self) -> str:
         """Format consistency metric section"""
         data = self.metrics['decision_consistency']
+        threshold = data.get('degradation_threshold_level')
         lines = [
             f"**Overall Consistency:** {data['overall_consistency']:.2%}",
             f"**Total Inconsistencies:** {data['total_inconsistencies']}",
             f"**Metric Score:** {data['metric_score']:.1f}/100",
             "",
+            "**H5 Threshold Detection:**",
+            f"  First meaningful degradation (>2pp drop): "
+            f"{'**' + threshold + '**' if threshold else 'Not detected — consistency stable across all levels'}",
+            "",
             "**Consistency by Duplication Level:**",
             ""
         ]
-        
-        for level in sorted(data['consistency_by_level'].keys(), 
+        for level in sorted(data['consistency_by_level'].keys(),
                            key=lambda x: int(x.replace('pct', ''))):
             consistency = data['consistency_by_level'][level]
-            lines.append(f"- {level:6s}: {consistency:6.2%}")
-        
+            drop = data.get('degradation_by_level', {}).get(level)
+            drop_str = f"  (drop: {drop:.2%})" if drop and drop > 0.001 else ""
+            lines.append(f"- {level:6s}: {consistency:6.2%}{drop_str}")
         return '\n'.join(lines)
     
     def _format_confidence_section(self) -> str:
@@ -1378,23 +1507,28 @@ controls before AI agent deployment.
         return '\n'.join(lines)
     
     def _format_reasoning_section(self) -> str:
-        """Format reasoning metric section"""
+        """Format reasoning quality section — Jaccard similarity within duplicate clusters"""
         data = self.metrics['reasoning_quality']
         lines = [
-            f"**Baseline Reasoning Length:** {data['baseline_length']:.1f} words",
-            f"**Length Variance:** {data['length_variance']:.2f}",
+            f"**Method:** Jaccard similarity of reasoning text within duplicate clusters",
+            f"**Rationale:** Deterministic, reproducible metric with no AI variability.",
+            f"  Stop words filtered before comparison to avoid inflation from shared filler phrases.",
+            f"**Avg Jaccard Similarity:** {data['avg_jaccard_overall']:.3f}",
             f"**Quality Score:** {data['quality_score']:.2%}",
             f"**Metric Score:** {data['metric_score']:.1f}/100",
+            f"**Interpretation:** 1.0 = identical reasoning across duplicates, 0.0 = no shared content",
             "",
-            "**Avg Reasoning Length by Duplication Level:**",
+            "**Jaccard Similarity by Duplication Level:**",
             ""
         ]
-        
-        for level in sorted(data['avg_reasoning_length_by_level'].keys(), 
+        for level in sorted(data['jaccard_by_level'].keys(),
                            key=lambda x: int(x.replace('pct', ''))):
-            length = data['avg_reasoning_length_by_level'][level]
-            lines.append(f"- {level:6s}: {length:.1f} words")
-        
+            score = data['jaccard_by_level'][level]
+            pairs = data['pair_counts_by_level'].get(level, 0)
+            if score is not None:
+                lines.append(f"- {level:6s}: {score:.3f} ({pairs} pairs evaluated)")
+            else:
+                lines.append(f"- {level:6s}: N/A (no duplicate pairs)")
         return '\n'.join(lines)
     
     def _format_field_importance_section(self) -> str:
