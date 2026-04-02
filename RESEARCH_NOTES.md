@@ -5,7 +5,7 @@ AI agents operate under an implicit contract with their data. For an agent to ma
 
 The six pillars of the contract are: **Authoritative, Timely, Contextual, Comprehensive, Responsible, and Secure.**
 
----
+---/Users/pmanta/Downloads/RESEARCH_NOTES.md
 
 ## Scope & Definitions
 
@@ -54,6 +54,27 @@ The base agent and evaluator pipeline is **locked** as of Experiment 1a. Changes
 - H6 segment distortion uses majority-vote per unique customer, not raw record counts
 - H5 threshold defined as first level where consistency drops >2pp from previous level
 - Composite score weights: consistency 30%, confidence 15%, distribution 10%, cost 15%, reasoning 15%, boundary 15%
+
+---
+
+## Experiment 1a: Key Findings Summary
+
+*Full detail in `experiments/01_authoritative/1a_dedup/1a_RESULTS.md`*
+
+1. **The Cliff Edge (H5):** No safe duplication threshold exists. Consistency drops immediately from 100% to 85% at 10% duplication and flatlines. "A little duplication is probably fine" is empirically false.
+
+2. **Confidently Wrong:** Agent confidence is essentially immovable (99.6% stability, 81.17%–81.49% range). Standard monitoring using confidence as a data quality proxy will show nothing wrong even as 1 in 7 customers receives conflicting treatment. The failure is silent.
+
+3. **The Agentic Blind Spot:** A human reviewer would eventually notice "I've seen this customer before." A stateless agent never will. The architectural properties that make agents attractive — consistency, tirelessness — simultaneously eliminate an incidental deduplication check that human workflows provide for free. Agentic pipelines require compensating upstream controls.
+
+4. **Volume Inflation (H3):** The HIGH/MEDIUM/LOW percentage distribution appears stable — but raw case volume inflates proportionally with duplication. At 100%, the agent produced 1,320 HIGH priority decisions from ~430 unique HIGH priority customers. A practitioner who skips deduplication assuming "the agent will deal with it" will see a stable distribution and conclude nothing is wrong — while resource planning decisions based on raw output project 3x actual caseload.
+
+5. **Wasted Spend:** 43.2% of total API spend ($14.07 of $27.54) was wasted on duplicate records. Cost per unique customer decision is 2.87x the clean baseline at 100% duplication.
+
+6. **Boundary Customer Vulnerability (H2 + H4):** Field variation only flips decisions for customers near a decision boundary. Strong-signal customers (e.g. `at_risk` segment) are immune. Boundary customers are disproportionately affected and are often the most consequential to classify correctly.
+
+7. **Consistent Field Reliance (H4):** Top-5 field ranking is 100% stable across all duplication levels: `last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate`, `support_tickets_open`. Provides data-driven, non-cherry-picked basis for 1b dithering target selection.
+
 
 ---
 
@@ -129,10 +150,18 @@ The base agent and evaluator pipeline is **locked** as of Experiment 1a. Changes
 | Mar 2026 | Run standard API for 1a, Batch API from 1b onward | Clean baseline; 50% cost saving for all subsequent experiments |
 | Mar 2026 | Retail domain as testbed | Tractable, realistic, transferable failure modes; domain limitation documented |
 | Mar 2026 | Temperature 0.0 | Deterministic outputs for reproducibility |
+| Mar 2026 | Exclude H4 and H6 from composite score | Both are diagnostic metrics, not quality metrics — including them would conflate measurement with finding |
+| Mar 2026 | Use plain-English chart titles with finding subtitles | Charts must be standalone readable for LinkedIn audience without accompanying writeup |
+| Mar 2026 | Document illustrative examples in RESULTS.md with full record IDs | Supports research article narrative and provides full traceability back to raw data |
+| Mar 2026 | Uniform duplication in 1a (no --segment-bias flag) | Establishes clean baseline; segment-biased rerun is optional future work before 1b |
 
 ---
 
 ## Open Questions
 - Should composite score weights be revisited between experiments or kept fixed for comparability? (Current: fixed)
 - When should we add ground truth calibration to the data generator?
-- 1b dither field selection: use 1a H4 top fields (`last_purchase_days_ago`, `churn_risk_score`, `total_spend`) as primary targets
+- **1b dither field selection:** Use 1a H4 top fields (`last_purchase_days_ago`, `churn_risk_score`, `total_spend`) as primary targets; dither identity fields (`name`, `email`) as control condition
+- **Boundary customer segment:** Should 1b explicitly define and track a "boundary zone" customer flag — customers near the HIGH/MEDIUM decision threshold? 1a evidence suggests these are the most vulnerable and most consequential.
+- **Volume inflation metric:** Add raw count vs unique customer count comparison to the evaluator before 1b — current metrics only track percentage distribution, missing the inflation failure mode entirely
+- **Optional 1a variant:** Rerun 1a with `--segment-bias high_value` before 1b to get a stronger H6 finding. Low cost since pipeline is already built.
+- **Agentic blind spot as design principle:** How do we formalize the compensating upstream controls finding into a generalizable recommendation? This should appear explicitly in the research article implications section.
