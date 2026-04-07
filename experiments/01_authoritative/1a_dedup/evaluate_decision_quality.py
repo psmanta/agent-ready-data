@@ -1045,7 +1045,7 @@ class DecisionQualityEvaluator:
             ax1.legend(fontsize=9)
         ax1.set_ylabel('Consistency Rate (%)', fontsize=11)
         ax1.set_title(
-            'H2 \u2014 Same customer, same decision?\n'
+            'H2 \u2014 Same Customer, Same Decision?\n'
             'Any duplication causes 1-in-7 customers to\n'
             'receive conflicting priority labels',
             fontsize=10, fontweight='bold')
@@ -1188,122 +1188,74 @@ class DecisionQualityEvaluator:
         self._generate_composite_score_chart()
     
     def _generate_composite_score_chart(self):
-        """Generate composite score breakdown — plain-English labels and clean score display."""
+        """Generate a separate chart showing composite score breakdown"""
         if not PLOTTING_AVAILABLE:
             return
-
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Left: Horizontal bar chart of individual scores
+        metrics = list(self.metrics['composite_score']['individual_scores'].keys())
+        scores = list(self.metrics['composite_score']['individual_scores'].values())
+        weights = list(self.metrics['composite_score']['weights'].values())
+        
+        # Format metric names for display
+        metric_labels = [m.replace('_', ' ').title() for m in metrics]
+        
+        colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', '#8B4513']
+        
+        y_pos = range(len(metrics))
+        bars = ax1.barh(y_pos, scores, color=colors, alpha=0.8)
+        
+        # Add weight labels on bars
+        for i, (bar, weight) in enumerate(zip(bars, weights)):
+            width = bar.get_width()
+            ax1.text(width + 1, bar.get_y() + bar.get_height()/2, 
+                    f'{weight:.0%}', ha='left', va='center', fontsize=10)
+        
+        ax1.set_yticks(y_pos)
+        ax1.set_yticklabels(metric_labels)
+        ax1.set_xlabel('Score (0-100)', fontsize=12)
+        ax1.set_title('Individual Metric Scores\n(with weights)', fontsize=13, fontweight='bold')
+        ax1.set_xlim([0, 110])
+        ax1.grid(True, alpha=0.3, axis='x')
+        
+        # Right: Gauge chart for composite score
         composite_score = self.metrics['composite_score']['composite_score']
         rating = self.metrics['composite_score']['rating']
-
-        PLAIN_LABELS = {
-            'decision_consistency': 'Same customer, same decision?',
-            'confidence_stability': "Agent knows when it's wrong?",
-            'distribution_shift':   'Overall priority mix stable?',
-            'cost_efficiency':      'No wasted API spend?',
-            'reasoning_quality':    'Consistent reasoning logic?',
-            'human_agent_boundary': 'Appropriate human oversight?',
-        }
-
-        RATING_COLORS = {
-            'EXCELLENT': '#2E86AB',
-            'GOOD':      '#6A994E',
-            'FAIR':      '#F18F01',
-            'POOR':      '#C73E1D',
-            'CRITICAL':  '#8B0000',
-        }
-        score_color = RATING_COLORS.get(rating, '#888888')
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-
-        # ---- Left: individual metric scores with plain-English labels ----
-        metrics = list(self.metrics['composite_score']['individual_scores'].keys())
-        scores  = list(self.metrics['composite_score']['individual_scores'].values())
-        weights = list(self.metrics['composite_score']['weights'].values())
-        labels  = [PLAIN_LABELS.get(m, m.replace('_', ' ').title()) for m in metrics]
-        colors  = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', '#8B4513']
-
-        y_pos = range(len(metrics))
-        bars  = ax1.barh(list(y_pos), scores, color=colors, alpha=0.85, height=0.6)
-
-        for bar, score, weight in zip(bars, scores, weights):
-            w = bar.get_width()
-            ax1.text(w + 1, bar.get_y() + bar.get_height() / 2,
-                     f'{score:.0f}  ({weight:.0%})',
-                     ha='left', va='center', fontsize=10, color='#333333')
-
-        ax1.set_yticks(list(y_pos))
-        ax1.set_yticklabels(labels, fontsize=11)
-        ax1.set_xlabel('Score (0-100)', fontsize=12)
-        ax1.set_xlim([0, 125])
-        ax1.set_title(
-            'What drives the overall score?\n'
-            'Each bar shows how this dimension performed\n'
-            'and how much weight it carries (in brackets)',
-            fontsize=11, fontweight='bold')
-        ax1.axvline(x=80, color='#6A994E', linestyle='--', alpha=0.5,
-                    linewidth=1.2, label='Good threshold (80)')
-        ax1.legend(fontsize=9, loc='lower right')
-        ax1.grid(True, alpha=0.25, axis='x')
-
-        # ---- Right: large-number score display ----
-        ax2.set_xlim([0, 1])
-        ax2.set_ylim([0, 1])
-        ax2.axis('off')
-
-        from matplotlib.patches import FancyBboxPatch
-        bg = FancyBboxPatch((0.05, 0.1), 0.9, 0.8,
-                            boxstyle='round,pad=0.02',
-                            facecolor=score_color, alpha=0.12,
-                            edgecolor=score_color, linewidth=2,
-                            transform=ax2.transAxes)
-        ax2.add_patch(bg)
-
-        ax2.text(0.5, 0.68, f'{composite_score:.1f}',
-                 ha='center', va='center', fontsize=72, fontweight='bold',
-                 color=score_color, transform=ax2.transAxes)
-
-        ax2.text(0.5, 0.52, 'out of 100',
-                 ha='center', va='center', fontsize=16, color='#555555',
-                 transform=ax2.transAxes)
-
-        ax2.text(0.5, 0.38, rating,
-                 ha='center', va='center', fontsize=26, fontweight='bold',
-                 color='white',
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor=score_color,
-                           edgecolor='none'),
-                 transform=ax2.transAxes)
-
-        scale_text = (
-            'EXCELLENT (90-100)\n'
-            'GOOD      (80-89)\n'
-            'FAIR      (70-79)\n'
-            'POOR      (60-69)\n'
-            'CRITICAL  (<60)'
-        )
-        ax2.text(0.5, 0.20, scale_text,
-                 ha='center', va='center', fontsize=9, color='#666666',
-                 family='monospace', transform=ax2.transAxes)
-
-        ax2.set_title(
-            'Overall Decision Quality Score\n'
-            'Weighted average across all quality dimensions\n'
-            '(higher = agent decisions more reliable under duplication)',
-            fontsize=11, fontweight='bold')
-
-        plt.suptitle(
-            'The Agentic Data Contract - Experiment 1a: Deduplication\n'
-            'How does duplicate data affect AI agent decision quality?',
-            fontsize=13, fontweight='bold', y=1.02)
-
+        
+        # Create gauge
+        theta = np.linspace(0, np.pi, 100)
+        
+        # Color zones
+        ax2.fill_between(theta, 0, 60, color='#C73E1D', alpha=0.3, label='Poor (0-60)')
+        ax2.fill_between(theta, 60, 70, color='#F18F01', alpha=0.3, label='Fair (60-70)')
+        ax2.fill_between(theta, 70, 80, color='#6A994E', alpha=0.3, label='Good (70-80)')
+        ax2.fill_between(theta, 80, 100, color='#2E86AB', alpha=0.3, label='Excellent (80-100)')
+        
+        # Needle
+        needle_angle = (composite_score / 100) * np.pi
+        ax2.plot([needle_angle, needle_angle], [0, 95], 'k-', linewidth=3)
+        ax2.plot(needle_angle, 95, 'ko', markersize=10)
+        
+        ax2.set_ylim([0, 100])
+        ax2.set_xlim([0, np.pi])
+        ax2.set_xticks([0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi])
+        ax2.set_xticklabels(['0', '25', '50', '75', '100'])
+        ax2.set_xlabel('Composite Score', fontsize=12)
+        ax2.set_title(f'Composite Quality Score\n{composite_score:.1f}/100 - {rating}', 
+                     fontsize=13, fontweight='bold')
+        ax2.legend(loc='upper right', fontsize=9)
+        ax2.grid(True, alpha=0.3)
+        
         plt.tight_layout()
-
+        
         output_file = self.output_dir / 'composite_score_breakdown.png'
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         print(f"  ✅ Saved: {output_file}")
-
+        
         plt.close()
-
-
+    
     # ========================================================================
     # REPORT GENERATION
     # ========================================================================
@@ -1715,6 +1667,314 @@ controls before AI agent deployment.
         
         return '\n\n'.join(recommendations)
     
+
+    def generate_boundary_customer_chart(self):
+        """
+        Standalone scatter plot showing where decision failures concentrate
+        in confidence/decision space — the boundary customer vulnerability chart.
+
+        v5 improvements:
+        - 2D safe zone: horizontal line between HIGH/MEDIUM + vertical at 0.85
+        - Safe zone shaded and annotated — "almost no decisions land here"
+        - Single red dot in HIGH/high-confidence made larger and prominent
+        - HIGH/MEDIUM boundary label repositioned to center of zone
+        - Medium priority tracking annotation added
+        - Current "safer zone" vertical line replaced by 2D zone logic
+        """
+        if not PLOTTING_AVAILABLE:
+            return
+
+        # Use 10% duplication — realistic scenario
+        available_levels = sorted(
+            [l for l in self.datasets.keys() if l != '0pct'],
+            key=lambda x: int(x.replace('pct', ''))
+        )
+        target_level = '10pct' if '10pct' in self.datasets else available_levels[0]
+        data = self.datasets[target_level]
+
+        print(f"\n  📊 Boundary chart using {target_level} duplication level "
+              f"({len(data['decisions'])} decisions)")
+
+        record_to_customer = self._get_record_to_customer_map(target_level)
+
+        from collections import defaultdict
+        customer_decisions_map = defaultdict(list)
+        for decision in data['decisions']:
+            record_id = decision['record_id']
+            customer_id = record_to_customer.get(record_id, record_id)
+            customer_decisions_map[customer_id].append(decision)
+
+        inconsistent_customers = set()
+        boundary_hm_confidences = []
+        boundary_ml_confidences = []
+
+        for customer_id, decisions in customer_decisions_map.items():
+            if len(decisions) > 1:
+                labels = set(d['business_decision'] for d in decisions)
+                if len(labels) > 1:
+                    inconsistent_customers.add(customer_id)
+                    if 'HIGH_PRIORITY' in labels and 'MEDIUM_PRIORITY' in labels:
+                        for d in decisions:
+                            boundary_hm_confidences.append(d['agent_confidence'])
+                    if 'MEDIUM_PRIORITY' in labels and 'LOW_PRIORITY' in labels:
+                        for d in decisions:
+                            boundary_ml_confidences.append(d['agent_confidence'])
+
+        if boundary_hm_confidences:
+            hm_zone_low  = min(boundary_hm_confidences)
+            hm_zone_high = max(boundary_hm_confidences)
+        else:
+            hm_zone_low, hm_zone_high = 0.75, 0.85
+
+        if boundary_ml_confidences:
+            ml_zone_low  = min(boundary_ml_confidences)
+            ml_zone_high = max(boundary_ml_confidences)
+        else:
+            ml_zone_low, ml_zone_high = 0.70, 0.80
+
+        DECISION_MAP = {'HIGH_PRIORITY': 2, 'MEDIUM_PRIORITY': 1, 'LOW_PRIORITY': 0}
+        SAFE_CONFIDENCE_THRESHOLD = 0.85
+
+        consistent_x, consistent_y     = [], []
+        inconsistent_x, inconsistent_y = [], []
+        # Track the high-confidence HIGH inconsistent dot separately for prominence
+        highlight_x, highlight_y = [], []
+
+        import random
+        random.seed(42)
+
+        for decision in data['decisions']:
+            record_id   = decision['record_id']
+            customer_id = record_to_customer.get(record_id, record_id)
+            confidence  = decision['agent_confidence']
+            dec_val     = DECISION_MAP.get(decision['business_decision'], 1)
+            h_jitter    = random.uniform(-0.012, 0.012)
+            v_jitter    = random.uniform(-0.25, 0.25)
+
+            if customer_id in inconsistent_customers:
+                # Separate out HIGH priority, high confidence inconsistent dots
+                if dec_val == 2 and confidence >= SAFE_CONFIDENCE_THRESHOLD:
+                    highlight_x.append(confidence + h_jitter)
+                    highlight_y.append(dec_val + v_jitter)
+                else:
+                    inconsistent_x.append(confidence + h_jitter)
+                    inconsistent_y.append(dec_val + v_jitter)
+            else:
+                consistent_x.append(confidence + h_jitter)
+                consistent_y.append(dec_val + v_jitter)
+
+        n_consistent   = len(consistent_x)
+        n_inconsistent = len(inconsistent_x) + len(highlight_x)
+
+        # Count dots in safe zone (MEDIUM/LOW, confidence >= threshold)
+        safe_zone_consistent = sum(
+            1 for x, y in zip(consistent_x, consistent_y)
+            if x >= SAFE_CONFIDENCE_THRESHOLD and y < 1.5
+        )
+        safe_zone_inconsistent = sum(
+            1 for x, y in zip(inconsistent_x, inconsistent_y)
+            if x >= SAFE_CONFIDENCE_THRESHOLD and y < 1.5
+        )
+        safe_zone_total = safe_zone_consistent + safe_zone_inconsistent
+
+        print(f"  Safe zone dots (MEDIUM/LOW, conf>={SAFE_CONFIDENCE_THRESHOLD}): "
+              f"{safe_zone_total} ({safe_zone_consistent} consistent, "
+              f"{safe_zone_inconsistent} inconsistent)")
+        print(f"  High-confidence HIGH inconsistent dots: {len(highlight_x)}")
+
+        # ---- Build the chart ----
+        fig, ax = plt.subplots(figsize=(15, 8))
+        plt.style.use('seaborn-v0_8-darkgrid')
+
+        # Shade boundary zones
+        ax.axvspan(hm_zone_low, hm_zone_high, alpha=0.20, color='#F18F01', zorder=1)
+        ax.axvspan(ml_zone_low, ml_zone_high, alpha=0.20, color='#A23B72', zorder=1)
+
+        # 2D Safe zone: MEDIUM/LOW decisions above confidence threshold
+        # Saturated green fill — almost nothing lands here, making emptiness striking
+        xmin_frac = (SAFE_CONFIDENCE_THRESHOLD - (min(consistent_x + inconsistent_x + highlight_x) - 0.02)) /                     (1.01 - (min(consistent_x + inconsistent_x + highlight_x) - 0.02))
+        ax.axhspan(-0.6, 1.5, xmin=xmin_frac,
+                  alpha=0.22, color='#6A994E', zorder=1)
+
+        # Horizontal boundary line between HIGH and MEDIUM
+        ax.axhline(y=1.5, color='#333333', linestyle='--', linewidth=1.2,
+                  alpha=0.6, zorder=4)
+
+        # Vertical safe zone threshold line
+        ax.axvline(x=SAFE_CONFIDENCE_THRESHOLD, color='#6A994E', linestyle='--',
+                  linewidth=1.5, alpha=0.8, zorder=4)
+
+        # Plot consistent points
+        ax.scatter(consistent_x, consistent_y,
+                  c='#2E86AB', alpha=0.40, s=20,
+                  label=f'No conflicts, duplicate records reached the same decision ({n_consistent:,} records)',
+                  zorder=2)
+
+        # Plot inconsistent points
+        ax.scatter(inconsistent_x, inconsistent_y,
+                  c='#C73E1D', alpha=0.65, s=20,
+                  label=f'Same customer got different priority decisions ({n_inconsistent:,} records)',
+                  zorder=3)
+
+        # Highlighted high-confidence HIGH inconsistent dots — larger, prominent
+        if highlight_x:
+            ax.scatter(highlight_x, highlight_y,
+                      c='#C73E1D', alpha=1.0, s=120,
+                      edgecolors='black', linewidths=1.5,
+                      zorder=5)
+            ax.annotate(
+                'Even here at the highest confidence,\n 1 failure exists.\nNo threshold is fully safe.',
+                xy=(highlight_x[0], highlight_y[0]),
+                xytext=(highlight_x[0] + 0.07, 2.50),
+                fontsize=9, color='#C73E1D', fontweight='bold',
+                ha='center',
+                arrowprops=dict(arrowstyle='->', color='#C73E1D', lw=1.5)
+            )
+
+        # Annotation: boundary zone insight — both zones
+        mid_boundary_x = (hm_zone_low + hm_zone_high) / 2
+        ax.annotate(
+            'No confidence threshold separates\nred from blue dots here.\n\nCould you draw a line that\nclearly separates them?',
+            xy=(mid_boundary_x, 1.85),
+            xytext=(0.715, 2.35),
+            fontsize=9, color='#C73E1D', fontweight='bold',
+            ha='center',
+            arrowprops=dict(arrowstyle='->', color='#C73E1D', lw=1.5)
+        )
+
+        # Second arrow pointing at MEDIUM dense cluster
+        ax.annotate(
+            '',
+            xy=(0.778, 1.05),
+            xytext=(0.735, 2.20),
+            arrowprops=dict(arrowstyle='->', color='#C73E1D', lw=1.5)
+        )
+
+        # Annotation: safe zone — almost nothing lands here
+        ax.text(SAFE_CONFIDENCE_THRESHOLD + 0.07, 0.4,
+                'High confidence & low impact.\nThis is the only place you\'d trust the agent to decide alone.\n\nBut just 1 decision lands here.\n\nFor boundary customers, the agent should never decide alone.',
+                fontsize=10, color='#1a1a1a', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+        # Annotation: HIGH is never in the safe zone
+        ax.text(SAFE_CONFIDENCE_THRESHOLD + 0.07, 2.6,
+                'HIGH priority decisions\nnever enter safe zone.',
+                fontsize=9, color='#1a1a1a', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+        # Boundary zone labels — both centered in their respective zones
+        hm_center = (hm_zone_low + hm_zone_high) / 2
+        ml_center = (ml_zone_low + ml_zone_high) / 2
+        ax.text(hm_center + 0.05, 2.72,
+                'HIGH / MEDIUM\nboundary zone',
+                ha='center', fontsize=9, color='#F18F01',
+                fontweight='bold', va='top')
+        ax.text(ml_center, 2.72,
+                'MEDIUM / LOW\nboundary zone',
+                ha='center', fontsize=9, color='#A23B72',
+                fontweight='bold', va='top')
+
+        # Y axis
+        ax.set_yticks([0, 1, 2])
+        ax.set_yticklabels(['LOW', 'MEDIUM', 'HIGH'], fontsize=13, fontweight='bold')
+        ax.set_ylim([-0.6, 2.85])
+
+        # X axis — percentage labels for business readability
+        all_x = consistent_x + inconsistent_x + highlight_x
+        x_min = min(all_x) - 0.02
+        ax.set_xlabel('Agent Confidence Score', fontsize=13)
+        ax.set_xlim([x_min, 1.01])
+        # Convert tick labels to percentages
+        existing_ticks = [t for t in [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00] if t >= x_min]
+        ax.set_xticks(existing_ticks)
+        ax.set_xticklabels([f'{int(t*100)}%' for t in existing_ticks], fontsize=10)
+
+        dup_pct = target_level.replace('pct', '%')
+        ax.set_title(
+            f'Where Do Decision Failures Concentrate? ({dup_pct} duplication)\n\n'
+            'The Agentic Data Contract | Experiment 1a | Deduplication ',
+            fontsize=12, fontweight='bold')
+
+        ax.legend(loc='lower left', fontsize=10, framealpha=1.0, facecolor='white', edgecolor='#cccccc', frameon=True)
+        ax.grid(True, alpha=0.2)
+
+        fig.text(0.5, 0.005,
+                 "Why deduplicate before the agent runs, not after? "
+                 "Red and blue dots share identical confidence scores. A post-decision review gate "
+                 "can't tell them apart. A deduplication gate upstream removes the red dots "
+                 "before the agent sees them.",
+                 ha='center', fontsize=9, color='#555555', style='italic')
+
+        plt.tight_layout(rect=[0, 0.06, 1, 1])
+
+        output_file = self.output_dir / 'boundary_customer_analysis.png'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✅ Saved: {output_file}")
+        plt.close()
+
+    def generate_decision_cliff_chart(self):
+            """
+            Standalone version of Chart 1.  The Decision Cliff (H2/H5).
+            Generated separately for use in LinkedIn posts and presentations.
+            """
+            if not PLOTTING_AVAILABLE:
+                return
+
+            dup_levels = sorted(self.datasets.keys(),
+                               key=lambda x: int(x.replace('pct', '')))
+            dup_percentages = [int(x.replace('pct', '')) for x in dup_levels]
+
+            consistency_data = [
+                self.metrics['decision_consistency']['consistency_by_level'][level]
+                for level in dup_levels
+            ]
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            plt.style.use('seaborn-v0_8-darkgrid')
+
+            ax.plot(dup_percentages, [c * 100 for c in consistency_data],
+                    marker='o', linewidth=2.5, markersize=10, color='#2E86AB')
+
+            threshold_level = self.metrics['decision_consistency'].get('degradation_threshold_level')
+            if threshold_level:
+                threshold_pct = int(threshold_level.replace('pct', ''))
+                ax.axvline(x=threshold_pct, color='#C73E1D', linestyle='--',
+                          alpha=0.8, linewidth=2, label=f'Decision Cliff ({threshold_level.replace("pct", "%")})')
+                ax.legend(fontsize=11)
+                ax.annotate(
+                    'At just 10% duplication, 1 in 7 customers\nreceives a different decision.\n\nSame customer, different outcome.\n\nThis 14% inconsistency never recovers.\n\nThere is no safe duplication level.',
+                    xy=(threshold_pct, 85),
+                    xytext=(threshold_pct + 12, 55),
+                    fontsize=10, color='#C73E1D', fontweight='bold',
+                    arrowprops=dict(arrowstyle='->', color='#C73E1D', lw=1.5)
+                )
+
+            ax.set_xlabel('Duplication Level', fontsize=12)
+            ax.set_ylabel('% of customers whose records all agree', fontsize=12)
+            ax.set_ylim([0, 108])
+            ax.grid(True, alpha=0.3)
+            ax.set_xticks(dup_percentages)
+            ax.set_xticklabels([f'{p}%' for p in dup_percentages], fontsize=10)
+            yticks = [0, 20, 40, 60, 80, 100]
+            ax.set_yticks(yticks)
+            ax.set_yticklabels([f'{y}%' for y in yticks], fontsize=10)
+
+            ax.set_title(
+                'The Decision Cliff : Duplicate Data Creates Conflicting Decisions\n\n'
+                'The Agentic Data Contract | Experiment 1a: Deduplication',
+                fontsize=11, fontweight='bold')
+
+            plt.tight_layout()
+
+            output_file = self.output_dir / 'decision_cliff_standalone.png'
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            print(f"  ✅ Saved: {output_file}")
+            plt.close()
+
+
+
     # ========================================================================
     # MAIN EVALUATION WORKFLOW
     # ========================================================================
@@ -1743,6 +2003,8 @@ controls before AI agent deployment.
         
         # Generate outputs
         self.generate_visualizations()
+        self.generate_decision_cliff_chart()
+        self.generate_boundary_customer_chart()
         self.generate_machine_readable_report()
         self.generate_human_readable_report()
         
@@ -1754,6 +2016,7 @@ controls before AI agent deployment.
         print(f"  - evaluation_report.md (human-readable)")
         print(f"  - decision_quality_analysis.png (6 metrics chart)")
         print(f"  - composite_score_breakdown.png (score breakdown)")
+        print(f"  - boundary_customer_analysis.png (decision space scatter)")
         
         return self.metrics
 
