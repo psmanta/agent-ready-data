@@ -240,3 +240,8 @@ cluster_map_*.json
 experiments/01_authoritative/1a_dedup/test_output/
 .env
 experiments/01_authoritative/1a_dedup/1a_linkedin_draft.md
+
+# Experiment output — regeneratable data
+experiments/01_authoritative/1a_dedup/experiments_output/agent/
+experiments/01_authoritative/1a_dedup/experiments_output/agent_results/decisions/*.jsonl
+experiments/01_authoritative/1a_dedup/test_output/
