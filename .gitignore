@@ -239,9 +239,15 @@ generation_stats_*.json
 cluster_map_*.json
 experiments/01_authoritative/1a_dedup/test_output/
 .env
-experiments/01_authoritative/1a_dedup/1a_linkedin_draft.md
 
 # Experiment output — regeneratable data
 experiments/01_authoritative/1a_dedup/experiments_output/agent/
 experiments/01_authoritative/1a_dedup/experiments_output/agent_results/decisions/*.jsonl
 experiments/01_authoritative/1a_dedup/test_output/
+experiments/01_authoritative/1a_dedup/experiments_output/agent_results/evaluation/evaluation_report.md
+*_linkedin_draft.md
+**/evaluation_report.md
+
+# Exception for selected charts
+!experiments/01_authoritative/1a_dedup/charts/*.png
+

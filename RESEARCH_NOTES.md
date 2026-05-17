@@ -1,80 +1,78 @@
 # The Agentic Data Contract — Research Notes
 
 ## Core Thesis
-AI agents operate under an implicit contract with their data. For an agent to make reliable decisions, that data must satisfy a set of conditions that are rarely made explicit. This research empirically tests what happens when each condition is violated — measuring the effect on decision quality, consistency, confidence, and aggregate accuracy.
+AI agents operate under an implicit contract with their data. For an agent to make reliable decisions, that data must satisfy a set of conditions that are rarely made explicit. The reflexive answer to agentic failure modes is often "data quality". 
 
-The six pillars of the contract are: **Authoritative, Timely, Contextual, Comprehensive, Responsible, and Secure.**
+Data quality is necessary, but not sufficient. This research empirically tests what happens when the contract is violated, measuring the effect on **Decision Quality**, the trustworthiness of agent decisions when high stakes are on the line.
 
----/Users/pmanta/Downloads/RESEARCH_NOTES.md
+The six pillars of the contract are: **Authoritative, Comprehensive, Contextual, Timely, Responsible, and Secure.**
+
+---
 
 ## Scope & Definitions
 
 ### What "Agent" Means in This Research
-The agent used in these experiments is a **decision-making engine** — it receives structured data, reasons over it holistically, and produces a structured judgment (priority level, confidence score, reasoning, key factors). It has:
+The agent used in these experiments is a **decision-making engine**. It receives data, reasons over it, and produces a structured judgment (priority level, confidence score, reasoning, key factors). It has:
+
 - No tools
 - No memory between calls
 - No ability to take action in the world
 
-It is not an agent in the fully autonomous sense. It represents the **cognitive core** of a fuller agentic system — the layer that would precede downstream actions like sending emails, triggering workflows, or escalating to humans.
+It is not an agent in the fully autonomous sense. It represents only the cognitive core of a fuller agentic system, the layer that would precede downstream actions like sending emails, triggering workflows, or escalating to humans.
 
 This scope is intentional and valid. The decision layer is present in virtually every agentic pipeline. If it is compromised by bad data, everything downstream is compromised too. Readers should note this distinction when generalizing findings.
 
 ### Domain Assumption
 All experiments use a **retail customer prioritization** task as the controlled testbed. This is a deliberate simplification chosen for:
-- Clear ground truth intuition (high spend + high churn risk = high priority)
+
+- Clear decision outcomes (HIGH, MEDIUM, or LOW priority) that are intuitive for an agent to reason about
 - Rich, realistic synthetic data generation
 - Transferable failure modes
 
-Conclusions are **assumed but not claimed** to generalize across domains. Multi-domain replication (healthcare, finance, logistics) is scoped as Phase 2.
+Conclusions are assumed but not claimed to generalize across domains. Multi-domain replication (healthcare, finance, logistics, etc.) is scoped for a later phase.
 
 This assumption must be stated explicitly in all published work.
 
 ---
 
-## Known Limitations (flag in all writeups)
+## Known Limitations
 
-1. **Self-reported confidence is not calibrated.** Agent confidence is part of the LLM output, not an externally validated score. A flat confidence curve across duplication levels does not mean the agent is consistently accurate — it may mean the agent has no signal that anything is wrong. This is actually a finding in itself ("confidently wrong"), but ground truth calibration is future work.
+1. **Self-reported confidence is not calibrated.** Agent confidence is part of the LLM output, not an externally validated score. A flat confidence curve across duplication levels does not mean the agent is consistently accurate, it may mean the agent has no signal that anything is wrong. This may actually be a finding in itself (the "confidently wrong" hypothesis).
 
-2. **No ground truth for decision accuracy.** We measure consistency, distribution shift, and reasoning similarity — but not whether any individual decision is objectively correct. Adding a rule-based ground truth function to the data generator is a future improvement.
+2. **No ground truth for decision accuracy.** We measure consistency, distribution shift, and reasoning similarity, but not whether any individual decision is objectively correct. Ground truth design will be implemented as required for specific experiments.
 
 3. **Single model, single temperature.** All experiments use `claude-haiku-4-5-20251001` at temperature 0.0. Results may differ across models or temperature settings. Model comparison is out of scope for Phase 1.
 
 4. **Synthetic data.** All customer records are generated. Real-world data distributions, correlations, and edge cases may produce different effects.
 
-5. **Retail domain only (Phase 1).** See Domain Assumption above.
+5. **Retail domain only.** See Domain Assumption above.
+
+6. **Distribution assumptions.** Where experiments require generating data with specific conditions (duplication, corruption, staleness, etc.), those conditions are distributed uniformly across the dataset by default. Real world data rarely distributes problems uniformly and certain customer types, systems, or time periods are often disproportionately affected. Observed effects may therefore be conservative estimates of real world impact.
+
+7. **Prompt design.** System prompts are designed to be guided but not prescriptive. However, prompt design choices may be identified post-run as potentially influencing results. Any such findings will be documented transparently in the relevant experiment's results file.
+
+8. **Experimental isolation.** Each experiment is designed to test a specific failure mode in isolation. In practice, some overlap between failure modes may be present in the experimental data. Evaluation metrics are always designed to focus on the target failure mode, and any known overlap is documented as a limitation in the relevant experiment.
 
 ---
 
 ## Pipeline Stability
-The base agent and evaluator pipeline is **locked** as of Experiment 1a. Changes will only be made if a specific experiment requires it, and will be versioned. The goal is comparability across experiments.
 
-**Key methodological decisions locked in 1a:**
-- Jaccard similarity (not LLM-based) for reasoning consistency — deterministic, reproducible, no AI variability
-- Cluster map as skeleton key for H2 consistency (record_id → customer_id join)
-- H6 segment distortion uses majority-vote per unique customer, not raw record counts
-- H5 threshold defined as first level where consistency drops >2pp from previous level
-- Composite score weights: consistency 30%, confidence 15%, distribution 10%, cost 15%, reasoning 15%, boundary 15%
+The base agent, LLM factory, and evaluator framework are locked. Changes will only be made if a specific experiment requires it, and will be versioned. The goal is comparability across experiments.
+
+Key methodological principles:
+
+- **Deterministic evaluation metrics** Avoiding AI-based scoring in the measurement layer eliminates variability that would contaminate findings. (where possible)
+- **The skeleton key architecture** Each experiment maintains a reference dataset that links what the agent sees back to known truth, enabling analysis that the agent itself cannot perform.
+- **Composite Decision Quality score** Each experiment produces a weighted composite score designed to quantify decision quality. Metrics, weights, and scoring approaches may evolve across experiments to reflect what each pillar is actually measuring. The goal is a comparable, honest signal not a rigid formula.
+
+This is a living research series. Methodologies will be documented, versioned, and explained when they evolve. The goal is transparency, not rigidity.
+
 
 ---
 
-## Experiment 1a: Key Findings Summary
+## Experiment Findings
 
-*Full detail in `experiments/01_authoritative/1a_dedup/1a_RESULTS.md`*
-
-1. **The Cliff Edge (H5):** No safe duplication threshold exists. Consistency drops immediately from 100% to 85% at 10% duplication and flatlines. "A little duplication is probably fine" is empirically false.
-
-2. **Confidently Wrong:** Agent confidence is essentially immovable (99.6% stability, 81.17%–81.49% range). Standard monitoring using confidence as a data quality proxy will show nothing wrong even as 1 in 7 customers receives conflicting treatment. The failure is silent.
-
-3. **The Agentic Blind Spot:** A human reviewer would eventually notice "I've seen this customer before." A stateless agent never will. The architectural properties that make agents attractive — consistency, tirelessness — simultaneously eliminate an incidental deduplication check that human workflows provide for free. Agentic pipelines require compensating upstream controls.
-
-4. **Volume Inflation (H3):** The HIGH/MEDIUM/LOW percentage distribution appears stable — but raw case volume inflates proportionally with duplication. At 100%, the agent produced 1,320 HIGH priority decisions from ~430 unique HIGH priority customers. A practitioner who skips deduplication assuming "the agent will deal with it" will see a stable distribution and conclude nothing is wrong — while resource planning decisions based on raw output project 3x actual caseload.
-
-5. **Wasted Spend:** 43.2% of total API spend ($14.07 of $27.54) was wasted on duplicate records. Cost per unique customer decision is 2.87x the clean baseline at 100% duplication.
-
-6. **Boundary Customer Vulnerability (H2 + H4):** Field variation only flips decisions for customers near a decision boundary. Strong-signal customers (e.g. `at_risk` segment) are immune. Boundary customers are disproportionately affected and are often the most consequential to classify correctly.
-
-7. **Consistent Field Reliance (H4):** Top-5 field ranking is 100% stable across all duplication levels: `last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate`, `support_tickets_open`. Provides data-driven, non-cherry-picked basis for 1b dithering target selection.
-
+Key findings for each completed experiment are documented in the experiment's own RESULTS.md file. This research notes file tracks methodology, decisions, and open questions, not findings summaries. See the research pillars and experiment backlog below for status and links.
 
 ---
 
@@ -85,83 +83,94 @@ The base agent and evaluator pipeline is **locked** as of Experiment 1a. Changes
 
 | ID | Experiment | Status | Notes |
 |----|-----------|--------|-------|
-| 1a | Dedup — impact of duplicate records on agent decisions | ✅ Complete | 1,000 base customers, 8 duplication levels (0–100%), 15,110 total records processed |
-| 1b | Dithering — data present but values untrustworthy | 🔲 Next | Fields present, values subtly wrong/corrupted. Use 1a H4 field importance to select dither targets (data-driven, not cherry-picked) |
-| 1c | Data Quality vs Data Quantity | 🔲 Backlog | Does volume compensate for quality? "Clean 500 vs noisy 1000" |
-| 1d | Conflicting Authorities | 🔲 Backlog | Two source systems, both "authoritative," disagree. MDM angle — what happens without a golden record? |
-| 1e | Incompleteness vs Noise | 🔲 Backlog | Missing fields vs wrong fields — are these equivalent failure modes? Includes imputation strategies as a variable |
-| 1f | Provenance Blindness | 🔲 Backlog | Agent cannot see data source confidence. Does knowing provenance change decisions? |
+| 1a | Dedup | ✅ Complete | How do duplicate records affect agent decision quality? |
+| 1b | Dithering | 🔲 Next | What happens when field values are present but don't reflect the truth? |
+| 1c | Quality vs Quantity | 🔲 Backlog | Does a larger dataset with noise outperform a smaller clean dataset? |
+| 1d | Conflicting Authorities | 🔲 Backlog | What happens when two authoritative source systems disagree on the same customer? |
+| 1e | Incompleteness vs Noise | 🔲 Backlog | Are missing fields and untruthful fields equivalent failure modes for decision quality? |
+| 1f | Provenance Blindness | 🔲 Backlog | Does knowing where the data came from change how well an agent uses it? |
+| 1g | Data Lifecycle Stage | 🔲 Backlog | Can an agent identify which stage of the data lifecycle best serves a given business requirement? |
 
-### Pillar 2: Timely
-*Timely data reflects the current state of the world. Stale data was true once.*
+### Pillar 2: Comprehensive
+*Data tells the whole truth.*
 
-| ID | Experiment | Status | Notes |
-|----|-----------|--------|-------|
-| 2a | Staleness — decisions made on data accurate at T but expired by T+N | 🔲 Backlog | Distinct from dithering: values are internally consistent, just outdated |
+*Experiments for this pillar are in design. Details to follow.*
 
 ### Pillar 3: Contextual
-*Peter has a specific POV on this pillar — to be defined.*
+*Data tells the truth the business defines.*
 
-### Pillar 4: Comprehensive
-*Peter has a specific POV on this pillar — to be defined.*
+*Experiments for this pillar are in design. Details to follow.*
+
+### Pillar 4: Timely
+*Data tells the truth for the world as it is now.*
+
+*Experiments for this pillar are in design. Details to follow.*
 
 ### Pillar 5: Responsible
-*Peter has a specific POV on this pillar — to be defined.*
+*Data tells the truth without creating outcomes we can't roll back.*
+
+*Experiments for this pillar are in design. Details to follow.*
 
 ### Pillar 6: Secure
-*Peter has a specific POV on this pillar — to be defined.*
+*Data tells the truth, privately and without unintended inference.*
+
+*Experiments for this pillar are in design. Details to follow.*
 
 ---
 
 ## Phase 2 (Future)
-- Multi-domain replication of Pillar 1 experiments (healthcare, finance, logistics)
-- Cross-domain comparison of failure mode severity
-- Revisit domain assumption with empirical evidence
+
+Phase 2 expands the research in two directions:
+
+**Cross-pillar synthesis (Phase 1.5):** Before expanding to new domains, the interactions between pillars will be explored. Phase 1 tests each data condition in isolation, a controlled but artificial scenario. Real enterprise data fails across multiple dimensions simultaneously. Phase 1.5 will design experiments that combine pillar failure modes and measure whether effects are additive, compounding, or whether one failure mode dominates. This is where the Agentic Data Contract framework moves from diagnostic to prescriptive, helping practitioners prioritize which data conditions to address first when resources are constrained.
+
+**Multi-domain replication:** Apply Pillar 1 experiments across healthcare, finance, and logistics to test whether failure modes and severity generalize beyond retail. The domain assumption documented in Phase 1 will be revisited with empirical evidence.
+
+**Agentic memory and knowledge structures:** Phase 1 explores how business context and knowledge structures provided as static input affects decision quality. Phase 2 goes further, examining how agent memory, knowledge graphs, and context persistence that evolve across sessions introduce new failure modes. When an agent can remember, retrieve, and reason across interactions, the contract with its data becomes significantly more complex, and the consequences of bad data compound rather than resetting with each call.
 
 ---
 
 ## Publishing Plan
 
-### 1. LinkedIn Post
-- **Format:** ~3,000 characters, LinkedIn audience
+### LinkedIn
+- **Format:** LinkedIn character limit applies, clarity and impact take priority within the constraint
 - **Tone:** Practitioner-facing, concrete findings, light on methodology
-- **Structure:** Hook → what we tested → what we found → why it matters → call to action
-- **Cadence:** One post per completed experiment
+- **Assets:** Key charts selected per experiment to support the narrative
+- **Structure:** Hook → what was tested → what was found → why it matters → call to action
+- **Cadence:** One post per completed experiment, aligned with but distinct from the pillar thought leadership series
 
-### 2. Research Article
+### Research Article
 - **Format:** Long-form, research paper style
 - **Audience:** Technical practitioners, data engineers, AI/ML teams
 - **Structure:** Abstract → hypothesis → methodology → results → implications → limitations → future work
-- **Limitations section must include:** retail domain assumption, synthetic data caveat, single-model caveat, self-reported confidence caveat, no ground truth for decision accuracy
+- **Limitations:** Reference the Known Limitations section in this file. Do not maintain a separate list
+- **Targets:** arXiv for citable reference, Towards Data Science for practitioner reach
 - **Cadence:** May batch multiple related experiments (e.g., 1a + 1b) into a single article
 
 ---
 
 ## Decisions Log
 
-| Date | Decision | Rationale |
-|------|---------|-----------|
-| Mar 2026 | Use Jaccard similarity for reasoning quality (Metric 5) | Deterministic and reproducible; LLM-based similarity would introduce AI variability that contaminates the measurement |
-| Mar 2026 | H6 segment distortion uses majority-vote per unique customer | Raw record counts inflate segment share for heavily duplicated segments, contaminating the shift measurement |
-| Mar 2026 | H5 threshold set at >2pp consistency drop | 2pp represents a detectable, non-trivial degradation actionable for a data quality team |
-| Mar 2026 | H4 ranking stability anchored explicitly to 0pct baseline | Dict ordering is not guaranteed; explicit anchor ensures we always compare against clean data |
-| Mar 2026 | Lock base pipeline after 1a | Comparability across experiments requires consistent methodology |
-| Mar 2026 | 1,000 base customers for 1a | Sufficient statistical power at low duplication levels; 500 too thin for H6 segment analysis |
-| Mar 2026 | Run standard API for 1a, Batch API from 1b onward | Clean baseline; 50% cost saving for all subsequent experiments |
-| Mar 2026 | Retail domain as testbed | Tractable, realistic, transferable failure modes; domain limitation documented |
-| Mar 2026 | Temperature 0.0 | Deterministic outputs for reproducibility |
-| Mar 2026 | Exclude H4 and H6 from composite score | Both are diagnostic metrics, not quality metrics — including them would conflate measurement with finding |
-| Mar 2026 | Use plain-English chart titles with finding subtitles | Charts must be standalone readable for LinkedIn audience without accompanying writeup |
-| Mar 2026 | Document illustrative examples in RESULTS.md with full record IDs | Supports research article narrative and provides full traceability back to raw data |
-| Mar 2026 | Uniform duplication in 1a (no --segment-bias flag) | Establishes clean baseline; segment-biased rerun is optional future work before 1b |
+| Milestone | Decision | Rationale |
+|-----------|---------|-----------|
+| 1a design | Use Jaccard similarity for reasoning quality | Deterministic and reproducible, LLM-based similarity would introduce AI variability that contaminates the measurement |
+| 1a design | Retail domain as testbed | Tractable, realistic, transferable failure modes. Domain limitation documented explicitly in all published work |
+| 1a design | Temperature 0.0 | Deterministic outputs for reproducibility across all experiments |
+| 1a design | Run standard API for 1a, Batch API from 1b onward | Clean baseline for 1a; 50% cost saving for all subsequent experiments with no impact on results |
+| 1a complete | Lock base agent, LLM factory, and evaluator framework. | Comparability across experiments requires consistent methodology. Changes will be versioned and documented. |
+| 1a complete | Exclude diagnostic metrics from composite score | Diagnostic metrics reveal where and why quality degrades. Including them in the score would conflate measurement with finding |
+| 1a complete | Plain-English chart titles with narrative subtitles | Charts must be standalone readable for LinkedIn audience without accompanying writeup |
+| 1a complete | Document illustrative examples in RESULTS.md with full record IDs | Provides full traceability back to raw data and supports research article narrative |
+| 1a review | Composite score visualization pending redesign | Current chart has rendering issues, redesign planned after 1b provides a comparative baseline |
+| 1a review | Prompt design limitations documented post-run | Transparency requires acknowledging methodology observations identified after data collection. A rerun is planned where warranted. |
+| 1a review | Defer optional 1a segment-bias rerun | 1a distributed duplicates uniformly across all customer segments. The --segment-bias flag would bias duplication toward a specific segment (e.g. 4x more duplicates for high_value customers) to produce a stronger segment distortion finding. Deferred, current uniform distribution findings are sufficient for conclusions and conservative estimates of real-world impact. |
 
 ---
 
 ## Open Questions
-- Should composite score weights be revisited between experiments or kept fixed for comparability? (Current: fixed)
-- When should we add ground truth calibration to the data generator?
-- **1b dither field selection:** Use 1a H4 top fields (`last_purchase_days_ago`, `churn_risk_score`, `total_spend`) as primary targets; dither identity fields (`name`, `email`) as control condition
-- **Boundary customer segment:** Should 1b explicitly define and track a "boundary zone" customer flag — customers near the HIGH/MEDIUM decision threshold? 1a evidence suggests these are the most vulnerable and most consequential.
-- **Volume inflation metric:** Add raw count vs unique customer count comparison to the evaluator before 1b — current metrics only track percentage distribution, missing the inflation failure mode entirely
-- **Optional 1a variant:** Rerun 1a with `--segment-bias high_value` before 1b to get a stronger H6 finding. Low cost since pipeline is already built.
-- **Agentic blind spot as design principle:** How do we formalize the compensating upstream controls finding into a generalizable recommendation? This should appear explicitly in the research article implications section.
+
+- **Ground truth calibration:** When and how should ground truth be added to the evaluation framework? Will likely be required as early as 1b, design TBD.
+- **Boundary customer tracking:** Should 1b explicitly define and track a "boundary zone" customer flag, customers near the HIGH/MEDIUM and MEDIUM/LOW decision thresholds? 1a evidence suggests these are the most vulnerable and most consequential.
+- **Volume inflation metric:** Add raw decision count vs unique customer count comparison to the evaluator before 1b. Current metrics track percentage distribution only, missing the volume inflation failure mode.
+- **Agentic blind spot as design principle:** How should I formalize the compensating upstream controls finding into a generalizable recommendation? This should appear explicitly in the research article implications section.
+- **Prompt-controlled rerun of 1a:** Rerun with illustrative examples removed from system prompt to confirm findings hold. Low priority, findings not expected to change materially.

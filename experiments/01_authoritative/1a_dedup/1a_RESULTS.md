@@ -1,13 +1,13 @@
 # Experiment 1a Results: Deduplication Impact on Agentic Decision Making
 
 **Status:** ✅ Complete  
-**Date:** March 2026  
+**Run Date:** March 2026  
 **Model:** `claude-haiku-4-5-20251001`  
 **Temperature:** 0.0  
 **Base customers:** 1,000  
 **Duplication levels tested:** 0%, 10%, 20%, 30%, 40%, 50%, 75%, 100%  
 **Total records processed:** 15,110  
-**Total API cost:** $27.54  
+**Total API cost:** $32.70
 
 ---
 
@@ -15,12 +15,12 @@
 
 | ID | Hypothesis | Result | Finding |
 |----|-----------|--------|---------|
-| H1 | Record-level decision integrity: Each record is processed independently | ✅ Confirmed by design | Agent processes each record independently with no shared state between API calls. Individual decision integrity is guaranteed architecturally, not empirically. Notable: this same property means the agent will never notice it has seen the same customer before. See Finding 3. |
-| H2 | Cluster-level consistency: Duplicate records in a cluster should receive the same decision. | ⚠️ Partially confirmed | 85–87% consistency across all duplication levels. 1 in 7 customers received conflicting priority decisions depending on which duplicate record the agent saw. Inconsistency is driven by field variation within clusters, not by duplication volume. |
-| H3 | Aggregate distribution drift: Duplicate records should not distort macro level decisions based on the full dataset | ⚠️ Nuanced | The HIGH/MEDIUM/LOW percentage distribution is stable (43% to 45.8% HIGH across full range). However, raw case volume inflates proportionally with duplication. At 100%, the agent reported 1,320 HIGH priority cases when the true unique count was ~430. A resource planning decision based on raw output would significantly over-project caseload. |
-| H4 | Field importance shift: Certain fields carry more decision-making weight than others, and field importance rankings will remain stable regardless of duplication level. | ✅ Confirmed | Top-5 field ranking is 100% stable across all duplication levels: `last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate`, `support_tickets_open`. Provides data-driven, non-cherry-picked basis for 1b dithering target selection. |
-| H5 | Duplication rate threshold: There is a duplication 'cliff' where decisions will degrade at a specific record duplication level | ✅ Confirmed (unexpected) | There is no safe threshold. Consistency drops immediately from 100% to 85% at the lowest tested level (10%) and flatlines across the full range. The common assumption that "a little duplication is probably fine" is empirically false. |
-| H6 | Segment distortion: Duplication does not affect all customer segments equally. Some segments may be disproportionately impacted by duplicate records | ✅ Confirmed | `at_risk` customers show zero distortion (overdetermined signal). `medium_value` customers are most sensitive (avg 2.8% shift). Distortion follows a predictable pattern tied to signal strength, not segment size. |
+| H1 | Record-level decision integrity: Each record is processed independently | ✅ Confirmed by design | Agent processes each record independently with no memory of previous records. Individual decision integrity is guaranteed architecturally, not empirically. Notably, this same property means the agent will never notice it has seen the same customer before. See Finding 3. |
+| H2 | Cluster-level consistency: When multiple records exist for the same customer, all should receive the same prioroty decision. | ⚠️ Partially confirmed | 85–87% consistency across all duplication levels. 1 in 7 customers received conflicting priority decisions depending on which duplicate record the agent saw. Duplicate records in this experiment contain natural variation, as they would in real enterprise systems, reflecting the fact that the same customer entered across multiple systems will rarely have identical records. This variation is what the agent responds to, not duplication volume itself. Experiment 1b will isolate the effect of specific field variation directly. |
+| H3 | Aggregate Output Inflation: Duplicate records create phantom demand. An agent has no way to detect inflated volume and will produce raw decision counts that a downstream consumer treats as real demand, invisibly distorting planning decisions. | ⚠️ Nuanced | The priority mix appears stable, roughly the same proportion of customers land in each tier regardless of duplication level but this stability is misleading. It masks raw volume inflation that scales directly with duplication. At 100% duplication, the agent produced 1,320 HIGH priority decisions from only ~430 unique customers. A practitioner seeing a stable distribution would conclude nothing is wrong while a hiring manager acting on raw output would staff for 3x the actual customers. |
+| H4 | Field importance stability: Certain fields carry more decision-making weight than others. The agent determines which fields matter, so stability is not guaranteed. The hypothesis is that the same fields will consistently rise to the top regardless of duplication level. | ✅ Confirmed | Top-5 field ranking is 100% stable across all duplication levels: `last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate`, `support_tickets_open`. Provides a data-driven, non-cherry-picked basis for 1b dithering target selection. Experiment 1b tests what happens when these specific fields contain incorrect values. |
+| H5 | Duplication rate threshold: We expect decision quality to degrade gradually with a measurable inflection point, below which some duplication may be tolerable, above which degradation becomes unacceptable. | ✅ Confirmed (unexpected) | There is no safe threshold. Consistency drops immediately from 100% to 85% at the lowest tested level (10%) and flatlines across the full range. The common assumption that "a little duplication is probably fine" is empirically false. |
+| H6 | Segment distortion: Customer segments are pre-assigned profile attributes (high-value, medium-value, low-value, at-risk), distinct from the HIGH/MEDIUM/LOW priority labels the agent assigns. The hypothesis: duplication does not affect all segments equally. Some may be more vulnerable based on the nature of their data. | ✅ Confirmed | `at_risk` customers received perfectly consistent decisions regardless of duplication. Their profiles contain such strong, unambiguous signals that no field variation could flip a decision. `medium_value` customers were most vulnerable, with an average 2.8% shift in how their records were prioritized across duplicate clusters. Segments with clearer, stronger signals are more resilient than those with mixed or moderate signals, regardless of how many customers are in that segment.
 
 ---
 
@@ -28,40 +28,58 @@
 
 | Metric | Score | Notes |
 |--------|-------|-------|
-| 1. Decision Consistency (H2): How consistent are decisions within a cluster? | 87.7/100 | 456 total inconsistencies across all levels |
-| 2. Confidence Stability: How confident is the agent of its own decision? | 99.6/100 | Range: 0.8117–0.8149 — essentially flat |
-| 3. Distribution Shift (H3): How much is a dataset level conclusion affected by duplicate records? | 68.1/100 | Max shift 3.19pp — stable in percentage terms but misleading (see H3 volume inflation) |
-| 4. Cost Efficiency: How much processing cost went into unique vs redundant decisions? | 56.8/100 | $14.07 wasted of $27.54 total — 43.2% waste |
-| 5. Reasoning Consistency (Jaccard): How similar is the agent's reasoning language when explaining decisions for duplicate records of the same customer? | 48.9/100 | Avg 0.489 word-overlap across duplicate pairs |
-| 6. Human-Agent Boundary: What proportion of decisions fall below the confidence threshold where human review is recommended? | 89.6/100 | ~10.4% of decisions require human review regardless of duplication level |
-| 7. Field Importance (H4): Are certain customer segments more susceptible to decision distortion from duplicate records? | Diagnostic | 100% ranking stability — top fields: `last_purchase_days_ago`, `churn_risk_score` |
-| 8. Segment Distortion (H6): How does the duplication level vary across different customer segments? | Diagnostic | `at_risk` immune, `medium_value` most sensitive |
-| **Composite Score** | **77.4/100 — FAIR** | Weighted across metrics 1–6 |
+| 1. Decision Consistency (H2): How consistent are decisions across duplicate records for the same customer? | 87.7/100 | 456 customer clusters contained at least one conflicting decision across all duplication levels. The score reflects average consistency rate across all levels. |
+| 2. Confidence Stability: How confident is the agent of its own decision? | 99.6/100 | Confidence ranged from 81.17% to 81.49% across all duplication levels. The score reflects stability of confidence across levels: 100 would mean perfectly identical confidence at every level. |
+| 3. Priority Mix Stability (H3): Does the overall proportion of HIGH/MEDIUM/LOW decisions change as duplication increases? | 68.1/100 | The HIGH/MEDIUM/LOW decision mix shifted by at most 3.19 percentage points across all duplication levels, appearing stable. The score reflects that stability, 100 would mean zero shift at any level, lower scores indicate more drift. However this masks raw volume inflation. See H3 finding and Finding 4. |
+| 4. Cost Efficiency: What % of API spend was wasted processing duplicate records that produced no additional decision value? | 56.8/100 | $14.07 of $32.60 total spend was spent processing duplicate records. 43.2% of the total run cost was waste. |
+| 5. How similar is the agent's reasoning language when explaining decisions for duplicate records of the same customer? | 48.9/100 | Avg 0.489 word-overlap across duplicate pairs. Measured using Jaccard similarity, the ratio of shared words to total unique words across two reasoning texts. A score of 1.0 would mean word-for-word identical reasoning, 0.0 means no shared words. Consistent decisions don't always produce consistent reasoning. |
+| 6. Human-Agent Boundary: What % of decisions fall below the confidence threshold suggesting human review may be needed? | 89.6/100 | ~10.4% of decisions had confidence scores below 0.80 which many agentic systems use as a proxy for decisions that may warrant human review. This rate held steady regardless of duplication level, meaning the agent didn't become less certain as data degraded. A confidence based escalation gate won't catch duplicate driven failures, the boundary customer chart shows this. A data quality gate upstream is more reliable than a confidence gate downstream. |
+| 7. Field Importance (H4): Do the same fields consistently drive the agent's decisions regardless of duplication level? | Diagnostic | 100% ranking stability across all duplication levels, the agent consistently cited the same top fields: last_purchase_days_ago, churn_risk_score, nps_score, lifetime_value_estimate, support_tickets_open. Marked as Diagnostic rather than scored as this metric reveals which fields drive decisions and whether that's stable, but a high or low score wouldn't directly indicate good or bad decision quality. Excluded from the composite score for this reason. |
+| 8. Segment Distortion (H6): Does duplication affect some customer segments more than others? Segments here are pre-assigned profile attributes (high-value, medium-value, low-value, at-risk), not the agent's priority decisions. | Diagnostic | at_risk customers received perfectly consistent decisions regardless of duplication, a strong unambiguous signals left no room for variation to flip a decision. medium_value customers were most vulnerable with an average 2.8% shift in their priority distribution. Marked as Diagnostic rather than scored as this metric reveals which customer types are most susceptible. Susceptibility alone doesn't indicate overall decision quality. Excluded from the composite score for this reason. |
+| **Composite Score** | **77.4/100 — FAIR** | Weighted composite of metrics 1–6. Weights reflect relative importance to decision trustworthiness: Decision Consistency 30%, Confidence Stability 15%, Distribution Shift 10%, Cost Efficiency 15%, Reasoning Consistency 15%, Human-Agent Boundary 15%. H4 and H6 excluded as diagnostic metrics. Weights are fixed across all experiments in this series to enable cross-experiment comparison. See evaluation_metrics.json for full breakdown. |
 
 ---
 
 ## Key Findings
 
 ### Finding 1: The Cliff Edge (H5)
-There is no safe duplication threshold. Decision consistency drops immediately from 100% to 85% at 10% duplication and flatlines for the remainder of the range. Practitioners hoping to identify a safe zone for duplication will not find one. The implication is binary: deduplicate before agent processing, or accept ~15% cluster inconsistency as a permanent baseline tax on every decision the agent makes.
+There is no safe duplication threshold. The rate at which the same customer receives the same decision drops immediately from 100% to 85% at 10% duplication and flatlines for the remainder of the range. Practitioners hoping to identify a safe zone for duplication will not find one. The implication is binary: deduplicate before agent processing, or accept a permanent 15% inconsistency tax on every decision the agent makes.
 
 ### Finding 2: Confidently Wrong (H2 + Confidence)
-Agent confidence is essentially immovable with 99.6% stability, ranging only from 81.17% to 81.49% across all duplication levels. This is the most operationally dangerous finding. Standard production monitoring using confidence scores as a proxy for data quality will show nothing wrong, even as 1 in 7 customers receives conflicting treatment. The agent has no internal signal that data quality is degrading. Because this failure mode is silent and scalable, the next experiment will focus on the effect of data dithering on agentic decision making.
+Self-reported agent confidence is essentially immovable with 99.6% stability, ranging only from 81.17% to 81.49% across all duplication levels. This is the most operationally dangerous finding. Many agentic systems use confidence score as the trigger for human escalation triggering human review if the agent is uncertain. But this experiment shows the agent is equally certain whether the data is clean or fully duplicated. An agent monitoring dashboard would show nothing wrong and the escalation gate never fires. Meanwhile, 1 in 7 customers received a different decision from the other 6. Because this failure mode is silent, scalable, invisible to standard monitoring, and worsens with volume, the next experiment asks a sharper question: what happens when the data isn't duplicated, but is wrong?
 
 ### Finding 3: The Agentic Blind Spot (H1 + H3)
-A human analyst reviewing duplicate records would eventually notice they had seen the same customer before. An agent operating statelessly will not, ever. This architectural property that makes agents attractive (consistency, tirelessness, no cognitive bias) simultaneously eliminates an incidental deduplication check that humans provide naturally. Agentic systems therefore require compensating upstream controls that human workflows provide for free. This is a systemic architectural risk, not merely a data quality problem.
+A human analyst reviewing duplicate records would eventually notice they had seen the same customer before. An agent operating without memory will not, ever. This architectural property that makes agents attractive, (consistency, tirelessness, no cognitive bias,etc.) simultaneously eliminates an incidental deduplication check that humans provide naturally. Agentic systems therefore require compensating upstream controls, checks that human workflows provide naturally and for free. This is a systemic architectural risk, not merely a data problem.
 
 ### Finding 4: Volume Inflation (H3)
-The aggregate HIGH/MEDIUM/LOW percentage distribution appears stable, but this is misleading. At 100% duplication, the agent produced 1,320 HIGH priority decisions from 2,882 records. The true count of unique HIGH priority customers was approximately 430. A resource planning decision based on raw agent output would project 3x the actual caseload. This failure mode is invisible in percentage-based metrics and requires comparing raw counts against unique customer counts to detect. This isn't a failure of the agent's decision logic, the agent correctly prioritized each record it saw. It's a consequence of the practitioner assumption: 'the agent will deal with it.' When the decision distribution looks stable in percentage terms, there is no obvious signal that anything is wrong, making it easy to conclude that deduplication is unnecessary overhead. But raw volume inflation is happening silently. A hiring manager acting on agent output would staff for 1,320 high-priority cases when the true count is 430, not because the agent made bad decisions, but because nobody asked whether the input data was clean before the agent ran.
+The decision mix appears stable, the proportion of customers in each priority tier holds roughly steady regardless of duplication level. But this stability is misleading. At 100% duplication, the agent produced 1,320 HIGH priority decisions from 2,882 records while the true count of unique HIGH priority customers was approximately 430.
+
+Consider a customer support team using this agent to plan staffing. The output says 1,320 customers need immediate attention. The manager hires accordingly, headcount, shift coverage, SLA commitments, etc. The true demand is 430. The team is overstaffed by 3x, budgets are blown, and nobody knows why because the agent's confidence was high and the priority mix looked stable throughout.
+
+This failure mode is invisible in percentage based metrics. It requires comparing raw decision counts against unique customer counts to detect.
+
+This isn't a failure of the agent's decision logic. The agent correctly prioritized each record it saw. It's a consequence of the practitioner assumption: 'the agent will deal with it.' Deduplication feels like overhead until the headcount projections come in at 3x reality."
 
 ### Finding 5: Wasted Spend (Cost)
-43.2% of total API spend ($14.07 of $27.54), was wasted processing duplicate records that added no decision value. At 100% duplication, the cost per unique customer decision is 2.87x the clean baseline. This is a direct, measurable business case for upstream deduplication. Every dollar spent on deduplication upstream prevents $1.87 in wasted inference spend at the agent layer.
+43.2% of total API spend ($14.07 of $32.60) was wasted processing duplicate records that added no decision value. At 100% duplication, the cost per unique customer decision is 2.87x the clean baseline.
+
+The temptation is to let the agent deal with it. Duplication feels like a data hygiene problem, not a budget problem, but this experiment shows it is both. The agent processes every duplicate without complaint, without flagging the redundancy, and without any signal that money is being spent on decisions that have already been made.
+
+This waste is easy to dismiss at experiment scale, $14 feels inconsequential, but inference costs scale linearly with record volume. An enterprise running this agent against a 10 million record dataset with 20% duplication isn't wasting $14, it's wasting hundreds of thousands of dollars re-deciding customers it has already seen.
 
 ### Finding 6: Boundary Customer Vulnerability (H2 + H4)
-Field variation in duplicate records only flips decisions for customers whose profiles sit near a decision boundary, not clearly HIGH, not clearly MEDIUM. Customers with strong, unambiguous signal across multiple fields (e.g. the `at_risk` segment) are immune. Boundary customers are disproportionately affected and are often the most important to classify correctly as they represent the edge cases where incorrect automation has the greatest business consequence and where human judgment is most valuable.
+Field variation in duplicate records produces inconsistent decisions primarily for customers whose profiles sit near a decision boundary such as not clearly HIGH and not clearly MEDIUM. Customers with strong, unambiguous signal (e.g. the at_risk segment) are immune, their profiles are so clearly defined that no plausible field variation could flip the outcome.
+
+A practitioner might conclude from this that pre-filtering by signal strength is the solution, deterministically assigning clear-cut cases and only sending boundary customers to the agent. That's a valid architectural pattern, and one worth exploring. But it doesn't eliminate the deduplication problem, it narrows it. Boundary customers are still processed from whatever records the system has, and if those records are duplicated, conflicting decisions follow. The 14% inconsistency tax from Finding 1 doesn't disappear, it concentrates on exactly the customers where it matters most.
+
+Boundary customers are disproportionately affected and are often the most consequential to classify correctly. They represent the edge cases where the evidence is genuinely ambiguous, where a wrong call has real business impact, and where human judgment adds value the agent simply doesn't have.
 
 ### Finding 7: Consistent and Predictable Field Reliance (H4)
-The agent's top-5 field ranking is identical across all 8 duplication levels. `last_purchase_days_ago` and `churn_risk_score` dominate consistently. This has two implications: (1) the agent's decision logic is auditable and stable: a practitioner can understand and predict what the agent is optimizing for, and (2) it provides a data-driven, non-cherry-picked foundation for designing the 1b dithering experiment.
+The agent's top 5 field ranking is identical across all 8 duplication levels: last_purchase_days_ago, churn_risk_score, nps_score, lifetime_value_estimate, and support_tickets_open. The agent was never told which fields matter, it determined this from the data. Yet decisions converged on the same priority ordering at every duplication level.
+
+This convergence isn't strictly a duplication finding, the agent would likely show similar field reliance on clean data alone. What duplication did was confirm the stability of that ranking across challenging conditions. The agent's field priorities held up even as duplication increased, suggesting these aren't artifacts of any particular dataset condition but a reflection of how the agent reasons about customer prioritization.
+
+This convergence is the foundation for Experiment 1b as I now have an empirically grounded list of the fields most likely to flip the agent's decisions when corrupted. The next experiment will introduce subtle errors into these fields and measure how decision quality degrades.
 
 ---
 
@@ -77,7 +95,7 @@ The agent's top-5 field ranking is identical across all 8 duplication levels. `l
 | 50% | 1,894 | $4.38 | 44.6% | 53.2% | 2.2% | 0.8135 |
 | 75% | 2,390 | $5.52 | 45.2% | 52.3% | 2.5% | 0.8142 |
 | 100% | 2,882 | $6.65 | 45.8% | 51.2% | 3.0% | 0.8136 |
-| **Total** | **15,110** | **$27.54** | | | | |
+| **Total** | **15,110** | **$32.70** | | | | |
 
 ---
 
@@ -86,15 +104,17 @@ The agent's top-5 field ranking is identical across all 8 duplication levels. `l
 1. **Self-reported confidence is not calibrated.** Agent confidence is part of the LLM output, not an externally validated score. The flat confidence curve is itself a finding but does not tell us whether individual decisions are objectively correct.
 2. **No ground truth for decision accuracy.** I measure consistency, distribution, and reasoning similarity, not whether any individual decision is correct. A rule-based ground truth function is future work.
 3. **Single model, single temperature.** `claude-haiku-4-5-20251001` at 0.0. Results may differ across models or temperature settings.
-4. **Synthetic data.** All records were generated specifically for this experiment. Real world distributions and correlations may produce different effects.
+4. **Synthetic data.** All records were generated specifically for this experiment. Real-world enterprise data carries distributions, correlations, and edge cases that synthetic generation cannot fully capture.
 5. **Uniform duplication distribution.** Duplicates were distributed evenly across segments. In real enterprise data, high-value customers interacting across multiple channels would likely be disproportionately duplicated. The data generator supports segment-biased duplication via --segment-bias (e.g. --segment-bias high_value weights duplication 4x toward a specific segment), but this flag was not used in this experiment. H6 effects observed here are therefore conservative estimates of real-world segment distortion.
 6. **Retail domain only.** I chose to test using a customer segmentation, retail domain scenario. Conclusions are assumed but not yet proven to generalize across other domains.
+7. **Prompt design influence.** Prompt design influence (identified post-run). The system prompt provides illustrative examples for each priority level. These may implicitly constrain the agent's decision space. Spot checks of reasoning confirm the agent cited data-driven signals rather than matching example patterns, but a prompt controlled rerun is planned for full transparency.
+8. **Variation embedded in duplication** Variation is embedded in duplication. Clusters in this experiment contain records ranging from near identical to significantly different, reflecting how duplicates appear in real enterprise systems. While natural variation likely influenced which specific decisions were inconsistent, the evaluation metrics were designed to measure the effects of duplication. Experiment 1b will isolate the effect of specific field variation directly.
 
 ---
 
 ## Illustrative Examples
 
-These examples are drawn from the `inconsistent_examples` field in `evaluation_metrics.json`. They are included here to support the research article narrative and to make the quantitative findings concrete. Each example is identified by customer ID and record IDs for full traceability back to the raw data.
+These examples are drawn from the `inconsistent_examples` field in `evaluation_metrics.json`. They are included here to make the quantitative findings concrete. Each example is identified by customer ID and record IDs for full traceability back to the decision output files.
 
 ---
 
@@ -113,51 +133,34 @@ These examples are drawn from the `inconsistent_examples` field in `evaluation_m
 
 ---
 
-### Example 2: Mario — Cluster Split, 6 Records (CUST_000520)
+### Example 2: Mario Cohen — Cluster Split, 6 Records (CUST_000520)
 
-**The finding it illustrates:** Cluster-level inconsistency at scale (H2) and the 50/50 split problem.
+**The finding it illustrates:** Cluster-level inconsistency at scale (H2) and the role of both data variation and LLM stochasticity in producing conflicting decisions.
 
-**What happened:** Six duplicate records for the same customer. Three records were classified HIGH_PRIORITY (confidence 0.82), three were classified MEDIUM_PRIORITY (confidence 0.78). The reasoning for each individual record is coherent — but the cluster is evenly split.
+**What happened:** Six duplicate records for the same customer. Four records have essentially identical key signals (364 days since purchase, 0.26 churn risk, $1,293 spend) and only the name formatting varies (Mario Cohen, mario cohen, MARIO COHEN, Maryo Cohen, etc). Two records contain significant variation in the underlying data. Yet the agent split the cluster 3 HIGH / 3 MEDIUM.
 
-| Records | Decision | Confidence | Reasoning emphasis |
-|---------|---------|-----------|-------------------|
-| REC_5C8B64AFC930, REC_2A82266B0986, REC_2FA77D9EE3BD | HIGH_PRIORITY | 0.82 | 362–391 days since last purchase, "immediate intervention needed" |
-| REC_CD75993D7BED, REC_088D66E55935, REC_B83F43D0C850 | MEDIUM_PRIORITY | 0.78 | Same inactivity, but framed as "standard attention to re-engage" |
+| Record | Name | last_purchase | churn | spend | Decision |
+|--------|------|---------------|-------|-------|----------|
+| REC_088D66E55935 | Mario Cohen | 364 | 0.26 | $1,293.61 | MEDIUM |
+| REC_2FA77D9EE3BD | Maryo Cohen | 362 | 0.26 | $1,293.61 | **HIGH** |
+| REC_CD75993D7BED | mario cohen | 364 | 0.26 | $1,293.61 | MEDIUM |
+| REC_B83F43D0C850 | Mario Cohen | 364 | 0.26 | $1,293.61 | MEDIUM |
+| REC_5C8B64AFC930 | MARIO COHEN | 362 | 0.28 | $1,280.92 | **HIGH** |
+| REC_2A82266B0986 | Merio Cohen | 391 | 0.18 | $1,254.67 | **HIGH** |
 
-**Why it matters:** This is not a case of one clearly correct decision and one error. The agent is genuinely uncertain about this customer, the 50/50 split reflects a profile that sits squarely on a decision boundary. In a deduplication scenario, a majority-vote approach would produce a tie. The customer's actual treatment depends entirely on which record the downstream system consumes first. This is exactly the class of decision that should be escalated to human review, but the agent's confidence scores (0.82 and 0.78) would not flag it under any reasonable threshold.
+**Why it matters:** Mario's case reveals two distinct failure modes operating simultaneously. The two records with significant data variation (5C and 2A) received HIGH decisions, variation is doing real work flipping the outcome. But REC_2FA77D9EE3BD also received HIGH despite having data nearly identical to the three MEDIUM records. There's only a 2-day difference in last_purchase_days_ago and a different name spelling. At temperature 0.0, the LLM still produces non-deterministic outputs for effectively identical inputs.
 
----
+This is a profile that sits squarely on a decision boundary. Even more telling, one might assume a clean break of 4 records (the near-identical ones) landing on one decision and 2 (the varied ones) on another. Instead the split is 3/3. Both data variation and inherent LLM stochasticity appear to have contributed to this inconsistency. If this cluster were deduplicated prior to the agent's decision, there would be no ambiguity as to the decision for the same customer.
 
-### Example 3: CUST_000248 — Tier-Critical Field Variation Flips Priority Category
-
-**The finding it illustrates:** H4 field importance — variation in tier-critical fields has outsized impact on decisions.
-
-**What happened:** Two duplicate records. The `total_spend` field varies significantly between them: $550.62 on one record, $358.95 on the other. This single field difference flips the decision from MEDIUM_PRIORITY to LOW_PRIORITY.
-
-| Record | Decision | Confidence | `total_spend` |
-|--------|---------|-----------|--------------|
-| REC_2C739D61BD5E | MEDIUM_PRIORITY | 0.72 | $550.62 — "moderate lifetime value" |
-| REC_5340FA47E827 | LOW_PRIORITY | 0.78 | $358.95 — "low-value with limited growth potential" |
-
-**Why it matters:** `total_spend` is one of the top-5 fields the agent consistently cites as a key decision factor (H4). When this field varies across duplicate records, even within a plausible range, it directly flips the priority category. This example provides concrete justification for using `total_spend` as a primary dither target in Experiment 1b. It also illustrates that a single tier-critical field change can override all other signals.
+This is one customer in a thousand. Multiply this kind of boundary zone ambiguity across millions of customer records and the operational consequences become impossible to ignore. The agent will produce coherent reasoning for every record, the confidence scores will look reasonable, and the contradictions will only surface when someone bothers to look at the cluster level, which, as established, very few, are is set up to do.
 
 ---
 
-## Implications for 1b Design
+## Implications for 1b Design - Data Dithering
 
-1. **Dither target fields:** Use H4 findings: `last_purchase_days_ago`, `churn_risk_score`, `total_spend`, `lifetime_value_estimate` as primary dither targets. Data-driven, not cherry picked.
+1. **Dither target fields:** Use H4 findings as data-driven targets: `last_purchase_days_ago`, `churn_risk_score`, `total_spend`, `lifetime_value_estimate`. These four were selected as monetary or temporal fields most likely to drive boundary flipping behavior. Selection is empirically grounded, not cherry-picked.
 2. **Control condition:** Dither identity fields (`name`, `email`) as a control, H4 predicts minimal effect.
 3. **Boundary customer tracking:** Explicitly identify and track boundary customers. Customers near the HIGH/MEDIUM decision boundary are most vulnerable and most important.
-4. **Batch API:** Implement before 1b. 50% cost saving with no impact on results.
+4. **Batch API:** Anthropic's batch API offers 50% cost savings on the same model and outputs. To be validated before the next experiment kicks off.
 
 ---
-
-## Next Steps
-
-- [x] Run evaluator and populate this document
-- [ ] Update `RESEARCH_NOTES.md` with key findings
-- [ ] Draft LinkedIn post
-- [ ] Draft research article
-- [ ] Implement volume inflation metric in evaluator (pending)
-- [ ] Add H4, H6, and volume inflation charts to evaluator (pending)
-- [ ] Design 1b dithering experiment

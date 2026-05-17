@@ -1004,55 +1004,93 @@ class DecisionQualityEvaluator:
     # ========================================================================
     
     def generate_visualizations(self):
-        """Generate all visualization charts"""
+        """Generate 6-chart narrative visualization grid.
+
+        Chart order tells a story:
+        [1] Something is broken      - Decision Cliff
+        [2] The agent has no idea    - Confidently Wrong Signal
+        [3] You are paying for it    - Hidden Cost of Duplication
+        [4] Here is where it hides   - Boundary Customer Analysis
+        [5] You cannot catch it      - Boundary Zone Zoom
+        [6] It goes deeper           - Reasoning Consistency
+        """
         if not PLOTTING_AVAILABLE:
-            print("\n⚠️  Skipping visualizations (matplotlib not available)")
+            print("\n  Skipping visualizations (matplotlib not available)")
             return
-        
+
         print("\n" + "="*60)
-        print("📊 Generating Visualizations")
+        print("Generating Visualizations")
         print("="*60)
-        
-        # Set style
+
         plt.style.use('seaborn-v0_8-darkgrid')
+        fig = plt.figure(figsize=(24, 16))
 
-        # Create figure — wider and taller to accommodate two-line chart titles
-        fig = plt.figure(figsize=(22, 15))
-
-        # Extract duplication levels (sorted)
         dup_levels = sorted(self.datasets.keys(),
                            key=lambda x: int(x.replace('pct', '')))
         dup_percentages = [int(x.replace('pct', '')) for x in dup_levels]
 
-        # Shared x-axis label at figure level — removes repetition from each chart
-        fig.text(0.5, 0.02, 'Duplication Level (%)', ha='center', fontsize=13, fontweight='bold')
+        fig.text(0.5, 0.01, 'Duplication Level (%)', ha='center',
+                 fontsize=13, fontweight='bold')
 
-        bar_width = 6  # Consistent bar width across bar charts
+        # Narrative header — italic, separated from chart area
+        narrative = (
+            '[1] Something is broken  ->  '
+            '[2] The agent has no idea  ->  '
+            "[3] You're paying for it  ->  "
+            "[4] Here's where it hides  ->  "
+            "[5] You can't catch it  ->  "
+            '[6] It goes deeper'
+        )
+        fig.text(0.5, 0.965, narrative, ha='center', fontsize=11,
+                 color='#1a1a1a', style='italic', fontweight='bold',
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='#f5f5f5',
+                          edgecolor='#cccccc', alpha=0.8))
 
-        # ---- Chart 1: Decision Consistency (H2/H5) ----
+        bar_width = 6
+
+        # ---- Chart 1: Decision Cliff ----
         ax1 = plt.subplot(2, 3, 1)
         consistency_data = [
             self.metrics['decision_consistency']['consistency_by_level'][level]
             for level in dup_levels
         ]
         ax1.plot(dup_percentages, [c * 100 for c in consistency_data],
-                marker='o', linewidth=2, markersize=8, color='#2E86AB')
+                marker='o', linewidth=2.5, markersize=9, color='#2E86AB')
         threshold_level = self.metrics['decision_consistency'].get('degradation_threshold_level')
         if threshold_level:
             threshold_pct = int(threshold_level.replace('pct', ''))
             ax1.axvline(x=threshold_pct, color='#C73E1D', linestyle='--',
-                       alpha=0.7, label=f'H5 threshold ({threshold_level})')
+                       alpha=0.8, linewidth=2,
+                       label=f'Decision Cliff ({threshold_level.replace("pct","%")})')
             ax1.legend(fontsize=9)
-        ax1.set_ylabel('Consistency Rate (%)', fontsize=11)
-        ax1.set_title(
-            'H2 \u2014 Same Customer, Same Decision?\n'
-            'Any duplication causes 1-in-7 customers to\n'
-            'receive conflicting priority labels',
-            fontsize=10, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        ax1.set_ylim([0, 105])
+            ax1.annotate(
+                'At just 10% duplication,\n1 in 7 customers receives\na different decision.\n\n'
+                'Same customer, different outcome.\n\nThis 14% inconsistency\nnever recovers.\n\n'
+                'There is no safe duplication level.',
+                xy=(threshold_pct, consistency_data[1] * 100),
+                xytext=(threshold_pct + 13, 55),
+                fontsize=8, color='#C73E1D', fontweight='bold',
+                arrowprops=dict(arrowstyle='->', color='#C73E1D', lw=1.5)
+            )
+        ax1.set_ylabel('% of customers whose records all agree', fontsize=10)
 
-        # ---- Chart 2: Confidence Stability ----
+        ax1.set_title(
+            'The Decision Cliff: Duplicate Data\n'
+            'Creates Conflicting Decisions',
+            fontsize=10, fontweight='bold')
+        ax1.text(0.5, 1.12, "[1] Something is broken",
+            transform=ax1.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#2E86AB')
+
+        ax1.set_xticks(dup_percentages)
+        ax1.set_xticklabels([f'{p}%' for p in dup_percentages], fontsize=9)
+        yticks = [0, 20, 40, 60, 80, 100]
+        ax1.set_yticks(yticks)
+        ax1.set_yticklabels([f'{y}%' for y in yticks], fontsize=9)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim([0, 108])
+
+        # ---- Chart 2: Confidently Wrong ----
         ax2 = plt.subplot(2, 3, 2)
         confidence_data = [
             self.metrics['confidence_stability']['confidence_by_level'][level]
@@ -1061,49 +1099,33 @@ class DecisionQualityEvaluator:
         confidence_pct = [c * 100 for c in confidence_data]
         ax2.plot(dup_percentages, confidence_pct,
                 marker='s', linewidth=2, markersize=8, color='#A23B72')
+        # Fixed y-axis 50-100% so flatness is visually obvious, not zoomed
+        ax2.set_ylim([50, 100])
         ax2.set_ylabel('Average Confidence (%)', fontsize=11)
+        ax2.set_xticks(dup_percentages)
+        ax2.set_xticklabels([f'{p}%' for p in dup_percentages], fontsize=9)
+        # Text box annotation — no arrow so it describes the whole line, not one point
+        ax2.text(0.5, 0.25,
+                'Confidence is essentially unchanged\n'
+                'regardless of duplication level.\n\n'
+                'The agent is confidently wrong.',
+                transform=ax2.transAxes,
+                fontsize=9, color='#A23B72', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                         edgecolor='#A23B72', alpha=0.9))
         ax2.set_title(
-            'The "Confidently Wrong" Signal\n'
-            'Agent confidence stays flat even as\n'
-            'duplication increases',
+            'The "Confidently Wrong" Signal:\n'
+            'Confidence stays flat as duplication increases',
             fontsize=10, fontweight='bold')
+        ax2.text(0.5, 1.12, "[2] The agent has no idea",
+            transform=ax2.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#A23B72')
+
         ax2.grid(True, alpha=0.3)
-        conf_min = min(confidence_pct)
-        conf_max = max(confidence_pct)
-        conf_range = max(conf_max - conf_min, 0.5)
-        ax2.set_ylim([conf_min - conf_range * 2, conf_max + conf_range * 2])
 
-        # ---- Chart 3: Decision Distribution (H3) ----
+        # ---- Chart 3: Hidden Cost ----
         ax3 = plt.subplot(2, 3, 3)
-        high_data = [
-            self.metrics['distribution_shift']['distribution_by_level'][level]['HIGH_PRIORITY'] * 100
-            for level in dup_levels
-        ]
-        medium_data = [
-            self.metrics['distribution_shift']['distribution_by_level'][level]['MEDIUM_PRIORITY'] * 100
-            for level in dup_levels
-        ]
-        low_data = [
-            self.metrics['distribution_shift']['distribution_by_level'][level]['LOW_PRIORITY'] * 100
-            for level in dup_levels
-        ]
-        ax3.bar(dup_percentages, high_data, width=bar_width, label='HIGH', color='#F18F01', alpha=0.8)
-        ax3.bar(dup_percentages, medium_data, width=bar_width, bottom=high_data,
-               label='MEDIUM', color='#C73E1D', alpha=0.8)
-        ax3.bar(dup_percentages, low_data, width=bar_width,
-               bottom=[h+m for h,m in zip(high_data, medium_data)],
-               label='LOW', color='#6A994E', alpha=0.8)
-        ax3.set_ylabel('Decision Distribution (%)', fontsize=11)
-        ax3.set_title(
-            'H3 \u2014 Does duplication shift macro decisions?\n'
-            'The HIGH/MEDIUM/LOW ratio holds steady \u2014\n'
-            'but raw case volume inflates with duplicate records',
-            fontsize=10, fontweight='bold')
-        ax3.legend(loc='lower right', fontsize=9)
-        ax3.grid(True, alpha=0.3, axis='y')
-
-        # ---- Chart 4: Cost Efficiency (H3 volume) ----
-        ax4 = plt.subplot(2, 3, 4)
         cost_data = [
             self.metrics['cost_efficiency']['cost_by_level'][level]
             for level in dup_levels
@@ -1112,80 +1134,171 @@ class DecisionQualityEvaluator:
             self.metrics['cost_efficiency']['waste_by_level'].get(level, 0)
             for level in dup_levels
         ]
-        ax4.bar(dup_percentages, cost_data, width=bar_width, label='Total Cost', color='#2E86AB', alpha=0.7)
-        ax4.bar(dup_percentages, waste_data, width=bar_width, label='Waste', color='#C73E1D', alpha=0.9)
-        ax4.set_ylabel('Cost (USD)', fontsize=11)
-        ax4.set_title(
-            'H3 \u2014 The Hidden Cost of Duplicate Processing\n'
-            '43% of total API spend was wasted\n'
-            're-deciding the same customers',
-            fontsize=10, fontweight='bold')
-        ax4.legend(fontsize=9)
-        ax4.grid(True, alpha=0.3, axis='y')
+        ax3.bar(dup_percentages, cost_data, width=bar_width,
+               label='Total Cost', color='#2E86AB', alpha=0.7)
+        ax3.bar(dup_percentages, waste_data, width=bar_width,
+               label='Wasted on duplicates', color='#C73E1D', alpha=0.9)
+        ax3.set_ylabel('Cost (USD)', fontsize=11)
+        ax3.set_xticks(dup_percentages)
+        ax3.set_xticklabels([f'{p}%' for p in dup_percentages], fontsize=9)
 
-        # ---- Chart 5: Reasoning Consistency (H2 — word-overlap / Jaccard) ----
+        ax3.set_title(
+            'The Hidden Cost of Duplicate Processing:\n'
+            '43% of total API spend was wasted',
+            fontsize=10, fontweight='bold')
+        ax3.text(0.5, 1.12, "[3] You're paying for it",
+            transform=ax3.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#C73E1D')
+
+
+        ax3.legend(fontsize=9)
+        ax3.grid(True, alpha=0.3, axis='y')
+
+        # ---- Chart 4: Boundary Customer scatter (full view) ----
+        ax4 = plt.subplot(2, 3, 4)
+        target_level = '10pct' if '10pct' in self.datasets else sorted(
+            [l for l in self.datasets.keys() if l != '0pct'],
+            key=lambda x: int(x.replace('pct', '')))[0]
+        data = self.datasets[target_level]
+        record_to_customer = self._get_record_to_customer_map(target_level)
+
+        from collections import defaultdict
+        customer_decisions_map = defaultdict(list)
+        for decision in data['decisions']:
+            cid = record_to_customer.get(decision['record_id'], decision['record_id'])
+            customer_decisions_map[cid].append(decision)
+
+        inconsistent_customers = set()
+        for cid, decisions in customer_decisions_map.items():
+            if len(decisions) > 1:
+                if len(set(d['business_decision'] for d in decisions)) > 1:
+                    inconsistent_customers.add(cid)
+
+        DECISION_MAP = {'HIGH_PRIORITY': 2, 'MEDIUM_PRIORITY': 1, 'LOW_PRIORITY': 0}
+        import random
+        random.seed(42)
+        cx, cy, ix, iy = [], [], [], []
+        for decision in data['decisions']:
+            cid = record_to_customer.get(decision['record_id'], decision['record_id'])
+            conf = decision['agent_confidence']
+            dv = DECISION_MAP.get(decision['business_decision'], 1)
+            hj = random.uniform(-0.01, 0.01)
+            vj = random.uniform(-0.2, 0.2)
+            if cid in inconsistent_customers:
+                ix.append(conf + hj); iy.append(dv + vj)
+            else:
+                cx.append(conf + hj); cy.append(dv + vj)
+
+        ax4.scatter(cx, cy, c='#2E86AB', alpha=0.3, s=12,
+                   label=f'Blue: all duplicate records agreed ({len(cx):,})')
+        ax4.scatter(ix, iy, c='#C73E1D', alpha=0.6, s=12,
+                   label=f'Red: same customer, different decisions ({len(ix):,})')
+        ax4.set_yticks([0, 1, 2])
+        ax4.set_yticklabels(['LOW', 'MEDIUM', 'HIGH'], fontsize=10, fontweight='bold')
+        ax4.set_xlabel('Agent Confidence Score', fontsize=10)
+        all_x = cx + ix
+        ax4.set_xlim([min(all_x) - 0.02, 1.01])
+        ax4.set_title(
+            'Failures concentrate in boundary zones\n'
+            f'({target_level.replace("pct","%")} duplication — see standalone chart for detail)',
+            fontsize=10, fontweight='bold')
+        ax4.text(0.5, 1.12, "[4] Here's where it hides",
+            transform=ax4.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#2E86AB')
+
+
+        ax4.legend(loc='upper left', fontsize=7, framealpha=0.9)
+        ax4.grid(True, alpha=0.2)
+
+        # ---- Chart 5: Boundary Zone Zoom — MEDIUM cluster at ~0.77 ----
         ax5 = plt.subplot(2, 3, 5)
+        # Zoom tightly into MEDIUM band, confidence ~0.72-0.82
+        zoom_cx = [x for x, y in zip(cx, cy) if 0.71 <= x <= 0.83 and 0.5 <= y <= 1.5]
+        zoom_cy = [y for x, y in zip(cx, cy) if 0.71 <= x <= 0.83 and 0.5 <= y <= 1.5]
+        zoom_ix = [x for x, y in zip(ix, iy) if 0.71 <= x <= 0.83 and 0.5 <= y <= 1.5]
+        zoom_iy = [y for x, y in zip(ix, iy) if 0.71 <= x <= 0.83 and 0.5 <= y <= 1.5]
+
+        ax5.scatter(zoom_cx, zoom_cy, c='#2E86AB', alpha=0.5, s=30, label='Agreed')
+        ax5.scatter(zoom_ix, zoom_iy, c='#C73E1D', alpha=0.8, s=30, label='Conflicted')
+        ax5.set_yticks([1])
+        ax5.set_yticklabels(['MEDIUM'], fontsize=10, fontweight='bold')
+        ax5.set_ylim([0.5, 1.5])
+        ax5.set_xlabel('Agent Confidence Score', fontsize=10)
+        ax5.set_xlim([0.70, 0.84])
+        # Challenge text — no arrow
+        ax5.text(0.5, 0.18,
+                'Red and blue dots share\nidentical confidence scores.\n\n'
+                'Could you draw a line that\nclearly separates them?',
+                transform=ax5.transAxes,
+                fontsize=9, color='#C73E1D', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                         edgecolor='#C73E1D', alpha=0.9))
+        ax5.set_title(
+            'Zoomed: MEDIUM priority cluster (~77% confidence)\n'
+            'Failures are invisible to confidence-based gates',
+            fontsize=10, fontweight='bold')
+        ax5.text(0.5, 1.12, "[5] You can't catch it",
+            transform=ax5.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#C73E1D')
+
+
+        ax5.legend(loc='upper right', fontsize=8)
+        ax5.grid(True, alpha=0.2)
+
+        # ---- Chart 6: Reasoning Consistency ----
+        ax6 = plt.subplot(2, 3, 6)
         jaccard_levels = [l for l in dup_levels
                          if self.metrics['reasoning_quality']['jaccard_by_level'].get(l) is not None]
         jaccard_pcts = [int(l.replace('pct', '')) for l in jaccard_levels]
         jaccard_data = [self.metrics['reasoning_quality']['jaccard_by_level'][l]
                        for l in jaccard_levels]
-        ax5.plot(jaccard_pcts, jaccard_data,
+        ax6.plot(jaccard_pcts, jaccard_data,
                 marker='^', linewidth=2, markersize=8, color='#6A994E')
-        ax5.set_ylabel('Word-Overlap Score (0=none, 1=identical)', fontsize=10)
-        ax5.set_title(
-            'H2 \u2014 Does the agent use the same logic?\n'
-            'Word-overlap analysis shows ~49% shared language\n'
-            'across duplicate records \u2014 consistent but not identical',
-            fontsize=10, fontweight='bold')
-        ax5.set_ylim([0, 1.05])
-        ax5.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, label='Perfect match (1.0)')
-        ax5.legend(fontsize=9)
-        ax5.grid(True, alpha=0.3)
-
-        # ---- Chart 6: Human-Agent Boundary (single axis, simplified) ----
-        ax6 = plt.subplot(2, 3, 6)
-        review_data = [
-            self.metrics['human_agent_boundary']['decisions_requiring_review'][level]['percentage'] * 100
-            for level in dup_levels
-        ]
-        ax6.plot(dup_percentages, review_data,
-                marker='o', linewidth=2, markersize=8, color='#C73E1D',
-                label='% Requiring Human Review')
-        mean_review = sum(review_data) / len(review_data)
-        ax6.axhline(y=mean_review, color='#2E86AB', linestyle='--',
-                   alpha=0.7, label=f'Avg: {mean_review:.1f}%')
-        review_min = min(review_data)
-        review_max = max(review_data)
-        review_pad = max((review_max - review_min) * 0.5, 0.5)
-        ax6.set_ylim([review_min - review_pad, review_max + review_pad])
-        ax6.set_ylabel('Decisions Requiring Review (%)', fontsize=11)
+        ax6.set_ylabel('Word-Overlap Score\n(0=no shared words, 1=identical)', fontsize=9)
+        ax6.set_xticks(jaccard_pcts)
+        ax6.set_xticklabels([f'{p}%' for p in jaccard_pcts], fontsize=9)
+        ax6.set_ylim([0, 1.05])
+        ax6.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5,
+                   label='Perfect match (1.0)')
+        # Text box — no arrow, describes the whole line
+        ax6.text(0.5, 0.35,
+                'Even when decisions agree,\nthe agent tells different\n'
+                'stories about the same customer.',
+                transform=ax6.transAxes,
+                fontsize=9, color='#6A994E', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                         edgecolor='#6A994E', alpha=0.9))
         ax6.set_title(
-            'When should a human intervene?\n'
-            '~10% of decisions need human oversight \u2014\n'
-            'duplication level does not change agent uncertainty',
+            'When the agent sees the same customer twice,\n'
+            'does it tell the same decision story?',
             fontsize=10, fontweight='bold')
+        ax6.text(0.5, 1.12, "[6] It goes deeper",
+            transform=ax6.transAxes, fontsize=14,
+            ha='center', style='italic', fontweight='bold', color='#6A994E')
+
+
         ax6.legend(fontsize=9)
         ax6.grid(True, alpha=0.3)
 
         # Overall title
         composite_score = self.metrics['composite_score']['composite_score']
         rating = self.metrics['composite_score']['rating']
-        fig.suptitle(f'Decision Quality Analysis Across Duplication Levels\n'
-                    f'Composite Quality Score: {composite_score:.1f}/100 ({rating})',
-                    fontsize=16, fontweight='bold', y=0.99)
+        fig.suptitle(
+            f'The Agentic Data Contract | Experiment 1a: Deduplication\n',
+            #f'Decision Quality Score: {composite_score:.1f}/100 ({rating})',
+            fontsize=14, fontweight='bold', y=0.995)
 
-        plt.tight_layout(rect=[0, 0.04, 1, 0.97])
-        
-        # Save figure
+        plt.tight_layout(rect=[0, 0.03, 1, 0.955])
+
         output_file = self.output_dir / 'decision_quality_analysis.png'
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        print(f"  ✅ Saved: {output_file}")
-        
+        print(f"  Saved: {output_file}")
         plt.close()
-        
-        # ---- Generate Composite Score Visualization ----
-        self._generate_composite_score_chart()
+
+        # TODO: composite score chart pending redesign — rendering issues identified
+        # self._generate_composite_score_chart()
     
     def _generate_composite_score_chart(self):
         """Generate a separate chart showing composite score breakdown"""
