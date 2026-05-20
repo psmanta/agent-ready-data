@@ -175,7 +175,7 @@ The following experiments are planned based on current research directions. This
 
 ## Contact
 Peter Manta
-- LinkedIn: [linkedin.com/in/peteri_manta](https://linkedin.com/in/peter-manta)
+- LinkedIn: [linkedin.com/in/peter-manta](https://linkedin.com/in/peter-manta)
 
 Questions, feedback, and collaboration welcome. If you reproduce these experiments and find different results, I especially want to hear from you.
 
