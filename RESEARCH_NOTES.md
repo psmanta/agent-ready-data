@@ -67,6 +67,36 @@ Key methodological principles:
 
 This is a living research series. Methodologies will be documented, versioned, and explained when they evolve. The goal is transparency, not rigidity.
 
+### Data Generator Architecture
+
+The original 1a data generator (`experiments/01_authoritative/1a_dedup/generate_customer_data.py`) 
+was not held to ground truth standards. It was designed to test duplication effects, not to 
+produce internally consistent baseline data. After 1a completed, I reazlied there was a better approach so
+the core customer generation logic was refactored into a shared base generator (`shared/data_generation/base_customer_generator.py`).
+
+The shared base generator produces what we define as data ground truth for Phase 1 experiments. Internally consistent, 
+and aligned with the well established DAMA six dimensions of data quality: Accuracy, Completeness, Consistency, Timeliness, Validity, and Uniqueness.
+
+**Distribution comparison (1a generator vs shared base generator, seed=42, n=1000):**
+
+| Metric | 1a Generator | New Generator | Notes |
+|--------|-------------|---------------|-------|
+| Segment distribution | Identical | Identical | No change |
+| Total spend (mean) | $7,468 | $7,696 | Within 3% — acceptable |
+| Churn risk (mean) | 0.38 | 0.40 | Slight upward shift — acceptable |
+| NPS (mean) | 6.34 | 6.04 | Slight downward shift — acceptable |
+| LTV (mean) | $12,101 | $22,225 | Intentionally higher. The new generator uses segment-specific multipliers (high_value: 2.5–4.0x vs flat 1.2–2.0x). More realistic. |
+| last_login_days_ago (mean) | 80 days | 184 days | Intentionally tighter. The new generator bounds login within 30 days of last purchase. Consistency fix. |
+| Consistency violations | 0 | 0 | Both pass |
+
+NOTE: The 1a data generator fails the Timeliness dimension. It used datetime.now() as its date anchor, so generated dates are relative to the run date (March 2026) 
+rather than a fixed snapshot. This does not affect 1a findings since duplication effects are date-independent, but it is another reason the shared base generator was built to a stricter standard.
+
+1a results are unaffected. The duplication mechanism in 1a did not depend on LTV multipliers, login/purchase consistency, or date anchoring. 
+Specifically, the higher LTV values in the new generator do not affect duplication consistency findings. the tighter login/purchase gap does not affect cluster-level decision analysis.
+The datetime.now() date anchor in 1a means dates are relative to the March 2026 run date rather than a fixed snapshot which it irrelevant for duplication effects but correctly flagged 
+by the DAMA Timeliness check. These differences are improvements to the baseline data quality for 1b onward, not corrections to 1a findings.
+
 
 ---
 
@@ -161,6 +191,7 @@ Phase 2 expands the research in two directions:
 | 1a complete | Exclude diagnostic metrics from composite score | Diagnostic metrics reveal where and why quality degrades. Including them in the score would conflate measurement with finding |
 | 1a complete | Plain-English chart titles with narrative subtitles | Charts must be standalone readable for LinkedIn audience without accompanying writeup |
 | 1a complete | Document illustrative examples in RESULTS.md with full record IDs | Provides full traceability back to raw data and supports research article narrative |
+| 1a complete | Refactor data generation into shared base generator | Extracted core customer generation into `shared/data_generation/base_customer_generator.py` after 1a completed. Enforces 7 consistency rules not present in 1a generator. 1a generator untouched and hermetically sealed for reproducibility. |
 | 1a review | Composite score visualization pending redesign | Current chart has rendering issues, redesign planned after 1b provides a comparative baseline |
 | 1a review | Prompt design limitations documented post-run | Transparency requires acknowledging methodology observations identified after data collection. A rerun is planned where warranted. |
 | 1a review | Defer optional 1a segment-bias rerun | 1a distributed duplicates uniformly across all customer segments. The --segment-bias flag would bias duplication toward a specific segment (e.g. 4x more duplicates for high_value customers) to produce a stronger segment distortion finding. Deferred, current uniform distribution findings are sufficient for conclusions and conservative estimates of real-world impact. |
@@ -169,7 +200,9 @@ Phase 2 expands the research in two directions:
 
 ## Open Questions
 
-- **Ground truth calibration:** When and how should ground truth be added to the evaluation framework? Will likely be required as early as 1b, design TBD.
+- **Ground truth calibration:** Two layers are now defined. 
+   - Data Ground Truth: The shared base generator produces internally consistent records meeting all six data quality dimensions. See Data Generator Architecture above. 
+   - Decision ground truth: a 5-run majority vote baseline at temperature 0.0 will be implemented in 1b. See `1b_DESIGN.md`. Implementation TBD.
 - **Boundary customer tracking:** Should 1b explicitly define and track a "boundary zone" customer flag, customers near the HIGH/MEDIUM and MEDIUM/LOW decision thresholds? 1a evidence suggests these are the most vulnerable and most consequential.
 - **Volume inflation metric:** Add raw decision count vs unique customer count comparison to the evaluator before 1b. Current metrics track percentage distribution only, missing the volume inflation failure mode.
 - **Agentic blind spot as design principle:** How should I formalize the compensating upstream controls finding into a generalizable recommendation? This should appear explicitly in the research article implications section.
