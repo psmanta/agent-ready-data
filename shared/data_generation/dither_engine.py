@@ -95,6 +95,47 @@ CATEGORICAL_FIELD_META: Dict[str, List[str]] = {
     "acquisition_channel": ["minimal", "moderate"],
 }
 
+# Boolean fields: dithered by flip probability, not percentage magnitude.
+# magnitude directly IS the probability a given customer's boolean gets
+# flipped — 0.15 magnitude means a 15% chance of flip, full stop. This
+# keeps "magnitude" meaning the same thing (frequency/severity of
+# corruption) across every field type in the engine, rather than scaling
+# flip likelihood by how many alternative values exist.
+BOOLEAN_FIELDS: List[str] = [
+    "is_vip",
+    "has_active_subscription",
+    "has_pending_order",
+]
+
+# Protected fields: fields the engine will NEVER dither directly, for two
+# structurally distinct reasons documented here so the reason is visible
+# to anyone reading this file, not just in the design amendment.
+#
+# DERIVED fields are computed FROM other fields after generation (and
+# re-derived after any dither, per _recompute_derived below). Dithering
+# a derived field directly would create an incoherent record — e.g.
+# is_at_risk=True with a churn_risk_score that doesn't support it — and
+# would confound any experiment without a dedicated hypothesis built
+# specifically to study derived-field mismatch, which does not currently
+# exist. See RESEARCH_NOTES.md / 1b amendment for full reasoning.
+#
+# UPSTREAM fields are used DURING generation to condition the sampling
+# distributions of OTHER fields (customer_segment determines the ranges
+# total_spend, churn_risk_score, etc. are drawn from). Dithering the
+# upstream field itself — changing the label after the profile was
+# already generated to match the ORIGINAL label — breaks the
+# segment/profile relationship from the top down with no defined
+# semantics. This is different from, and excluded in favor of, dithering
+# the downstream numeric fields far enough that they no longer match
+# their original segment's typical range (the "segment/profile mismatch"
+# analysis lens) — that is a valid and interesting bottom-up effect,
+# computed as an analysis enrichment, not built as a dither mechanism.
+PROTECTED_FIELDS: Dict[str, str] = {
+    "is_at_risk":                 "derived",   # computed from churn_risk_score
+    "recently_contacted_support": "derived",   # computed from support_tickets_open
+    "customer_segment":           "upstream",  # conditions other fields' sampling
+}
+
 # Entry error model targets
 ENTRY_ERROR_MODELS = {
     "unit_conversion":     ["total_spend", "lifetime_value_estimate",
@@ -175,11 +216,32 @@ class DitherConfig:
             if dt not in valid_types:
                 raise ValueError(f"Unknown dither_type '{dt}'. Valid: {valid_types}")
 
-        all_known = set(NUMERIC_FIELD_META) | set(CATEGORICAL_FIELD_META)
+        all_known = set(NUMERIC_FIELD_META) | set(CATEGORICAL_FIELD_META) | set(BOOLEAN_FIELDS)
         for f in self.fields:
+            if f in PROTECTED_FIELDS:
+                reason = PROTECTED_FIELDS[f]
+                if reason == "derived":
+                    raise ValueError(
+                        f"'{f}' is a derived field (computed from another field "
+                        f"after generation) and cannot be dithered directly. "
+                        f"Dithering it would create an internally incoherent "
+                        f"record with no defined semantics. See PROTECTED_FIELDS."
+                    )
+                elif reason == "upstream":
+                    raise ValueError(
+                        f"'{f}' is an upstream field that conditions the sampling "
+                        f"distributions of other fields during generation. "
+                        f"Dithering it directly breaks the segment/profile "
+                        f"relationship from the top down with no defined "
+                        f"semantics. To study segment/profile mismatch, dither "
+                        f"the downstream numeric fields far enough that they no "
+                        f"longer match this field's original value — see the "
+                        f"segment/profile mismatch analysis lens in the "
+                        f"evaluator instead. See PROTECTED_FIELDS."
+                    )
             if f not in all_known:
-                raise ValueError(f"Unknown field '{f}'. Check NUMERIC_FIELD_META "
-                                 f"and CATEGORICAL_FIELD_META.")
+                raise ValueError(f"Unknown field '{f}'. Check NUMERIC_FIELD_META, "
+                                 f"CATEGORICAL_FIELD_META, and BOOLEAN_FIELDS.")
 
     def get_magnitude(self, field_name: str) -> float:
         if isinstance(self.magnitude, dict):
@@ -316,6 +378,28 @@ def _dither_address(address, tier, rng):
         return address
 
 
+def _dither_boolean(value: bool, magnitude: float, rng: random.Random) -> bool:
+    """
+    Dither a boolean field by flip probability.
+
+    magnitude IS the flip probability directly — 0.15 magnitude means this
+    customer's boolean has a 15% chance of being flipped. This keeps
+    "magnitude" meaning the same thing (how often/severely this customer's
+    data gets corrupted) across every field type in the engine — numeric
+    percentage drift, categorical plausibility tier, and boolean flip
+    probability are all just different implementations of "magnitude
+    controls how disruptive the corruption is," not three unrelated
+    concepts wearing the same parameter name.
+
+    For a true/false field there is only one other value to flip to, so
+    unlike an N-way categorical field, "which value does it become" has
+    no additional decision to make — it simply becomes not(value).
+    """
+    if rng.random() < magnitude:
+        return not value
+    return value
+
+
 def _dither_categorical(value, field_name, tier, rng):
     if field_name == "email":   return _dither_email(value, tier, rng)
     if field_name == "name":    return _dither_name(value, tier, rng)
@@ -401,6 +485,13 @@ class DitherEngine:
         elif field_name in CATEGORICAL_FIELD_META:
             tier = self.config.get_categorical_tier(field_name)
             return _dither_categorical(value, field_name, tier, self.rng)
+        elif field_name in BOOLEAN_FIELDS:
+            # Boolean fields ignore dither_type (drift/entry_error) — a
+            # flip is a flip regardless of "mechanism," since there's no
+            # meaningful distinction between a boolean decaying over time
+            # vs. an automation artifact flipping it. Both dither_type
+            # values route to the same flip-probability logic.
+            return _dither_boolean(value, magnitude, self.rng)
         return value
 
     def _resolve_directions(self):
