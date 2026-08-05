@@ -7,10 +7,15 @@ The Agentic Data Contract · Pillar 1: Authoritative
 Combines 5 independent baseline runs (same clean data, temperature 0.0)
 into a single baseline reference file. For each customer:
 
-  - majority_decision:     the most common decision across 5 runs
+  - majority_decision:     the most common decision across 5 runs, OR
+                            the sentinel "TIED_NO_MAJORITY" if no unique
+                            majority exists (see below)
   - decision_distribution: exact counts (e.g. {"HIGH_PRIORITY": 5})
   - stability:             "stable" (5/5), "lightly_boundary" (4/1),
-                            or "deeply_boundary" (3/2)
+                            "deeply_boundary" (3/2 or 3/1/1 — unique top,
+                            just inconsistent), or "tied_no_majority"
+                            (2/2/1 in any arrangement — no unique top at
+                            all)
   - avg_confidence:        mean agent_confidence across the 5 runs
   - confidence_range:      (min, max) confidence across the 5 runs
 
@@ -26,6 +31,24 @@ conflate genuine model stochasticity with the effects we're trying to
 measure in 1b. Five runs and a majority vote separates "this customer's
 decision is inherently unstable" from "this customer's decision changed
 because of dithered data."
+
+On tied_no_majority — a documented exception to "the primary vote never
+changes":
+Every other tier's majority_decision is locked and never touched by
+refined boundary-expansion data, specifically so every customer is
+compared against ground truth established at equal computational cost
+(5 runs), regardless of how much extra effort later went into refining
+uncertain cases. For tied_no_majority customers, this principle doesn't
+apply, because there is no non-arbitrary 5-run answer to protect in the
+first place — Counter.most_common() would otherwise silently pick
+whichever decision happened to be inserted first, an artifact of run-file
+processing order, not a real result. These customers still go through
+boundary_expansion like deeply_boundary and lightly_boundary customers,
+but for tied_no_majority specifically, their refined plurality (once
+converged) becomes their reference decision for H1-H8b comparisons —
+not because we let more data override an answer we didn't like, but
+because we're establishing an answer that never existed at the primary
+level at all.
 
 Usage:
     python aggregate_baseline.py \
@@ -75,22 +98,40 @@ def classify_stability(decisions: List[str]) -> str:
 
     stable:           5/5 — all runs agree
     lightly_boundary: 4/1 — one dissenting run
-    deeply_boundary:  3/2 — near-even split (most ambiguous)
+    deeply_boundary:  3/2 — near-even split, but a UNIQUE top count —
+                      majority_decision is well-defined (whichever
+                      decision got 3)
+    tied_no_majority: no unique top count — genuinely no majority exists.
+                      For 5 runs across 3 categories, this can only be a
+                      2/2/1 split (in any assignment of which two
+                      categories tie). 3/1/1 does NOT qualify — its top
+                      count of 3 is unique even though the bottom two are
+                      tied, so majority_decision is fine there.
 
-    A 5-run distribution can only ever be 5/0, 4/1, or 3/2 (or a 3-way
-    split like 3/1/1, 2/2/1) given 3 possible decision categories.
-    We fold any split more fragmented than 4/1 into deeply_boundary
-    since the interpretation — "no clear majority" — is the same.
+    This distinction matters: for every other tier, majority_decision is
+    a real, well-defined answer that just happens to be more or less
+    consistent. For tied_no_majority, there IS no such answer at the
+    primary 5-run level — Counter.most_common() would silently return
+    whichever tied decision happened to be inserted first (i.e. whichever
+    run file was processed earliest), which is an artifact of file
+    processing order, not a measurement of anything about the customer or
+    the agent. See aggregate_customer() for how this sentinel is handled.
     """
     counts = Counter(decisions)
-    top_count = counts.most_common(1)[0][1]
+    ordered = counts.most_common()  # sorted by count, descending
+    top_count = ordered[0][1]
+    n_tied_for_top = sum(1 for _, count in ordered if count == top_count)
 
-    if top_count == 5:
+    if n_tied_for_top > 1:
+        return "tied_no_majority"
+    elif top_count == 5:
         return "stable"
     elif top_count == 4:
         return "lightly_boundary"
     else:
-        # Covers 3/2, 3/1/1, 2/2/1 — all represent meaningful disagreement
+        # 3/2 (unique top of 3) or 3/1/1 (unique top of 3, tied bottom
+        # doesn't matter for majority purposes) — both have a real,
+        # well-defined majority_decision
         return "deeply_boundary"
 
 
@@ -107,8 +148,19 @@ def aggregate_customer(
                    if r.get("agent_confidence") is not None]
 
     decision_counts = dict(Counter(decisions))
-    majority_decision = Counter(decisions).most_common(1)[0][0]
     stability = classify_stability(decisions)
+
+    if stability == "tied_no_majority":
+        # Explicit sentinel — NOT Counter.most_common()'s silent choice,
+        # which would return whichever tied decision happened to be
+        # inserted first (an artifact of run-file processing order, not
+        # a real measurement). Downstream consumers must handle this
+        # sentinel deliberately. See the module-level note on the
+        # documented exception for how these customers' reference
+        # decision gets established via boundary_expansion instead.
+        majority_decision = "TIED_NO_MAJORITY"
+    else:
+        majority_decision = Counter(decisions).most_common(1)[0][0]
 
     avg_confidence = round(sum(confidences) / len(confidences), 4) if confidences else None
     confidence_range = (

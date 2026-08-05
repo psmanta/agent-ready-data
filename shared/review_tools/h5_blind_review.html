@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>H5 Blind Detection Review — The Agentic Data Contract</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F5F6F5;
+    --ink: #1C2321;
+    --ink-soft: #4A5250;
+    --muted: #8A9290;
+    --surface: #FFFFFF;
+    --border: #E1E4E2;
+    --signal: #2D6E6E;
+    --signal-soft: #E8F0F0;
+    --ambiguous: #B8873B;
+    --ambiguous-soft: #F5EEE1;
+    --none: #6B7684;
+    --none-soft: #EEF0F2;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    --font-serif: 'Source Serif 4', Georgia, serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 720px;
+  }
+
+  /* --- Signal line signature element --- */
+  .signal-line {
+    width: 100%;
+    height: 32px;
+    margin-bottom: 32px;
+    overflow: hidden;
+    opacity: 0.55;
+  }
+  .signal-line svg { width: 100%; height: 100%; display: block; }
+  .signal-line path {
+    fill: none;
+    stroke: var(--signal);
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+    animation: signal-drift 8s linear infinite;
+  }
+  @keyframes signal-drift {
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: -200; }
+  }
+
+  h1 {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 4px 0;
+  }
+  .subtitle {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 32px 0;
+    line-height: 1.6;
+  }
+
+  /* --- Setup screen --- */
+  .setup-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 32px;
+  }
+  .setup-instructions {
+    font-family: var(--font-serif);
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--ink);
+    margin-bottom: 24px;
+  }
+  .setup-instructions strong { color: var(--signal); }
+
+  textarea {
+    width: 100%;
+    min-height: 140px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--ink);
+    resize: vertical;
+    margin-bottom: 16px;
+  }
+  textarea:focus { outline: 2px solid var(--signal); outline-offset: -1px; }
+
+  .btn-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+  button {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 10px 18px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  button:hover { border-color: var(--signal); color: var(--signal); }
+  button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+  button.primary {
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+  }
+  button.primary:hover { background: var(--signal); border-color: var(--signal); color: white; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:disabled:hover { border-color: var(--border); color: var(--ink); }
+
+  .demo-note {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  .resume-banner {
+    background: var(--signal-soft);
+    border: 1px solid var(--signal);
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  /* --- Review screen --- */
+  .progress-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .progress-bar-track {
+    width: 100%;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-bottom: 32px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--signal);
+    transition: width 0.3s ease;
+  }
+
+  .reasoning-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 40px 36px;
+    margin-bottom: 24px;
+    min-height: 160px;
+    display: flex;
+    align-items: center;
+  }
+  .reasoning-text {
+    font-family: var(--font-serif);
+    font-size: 19px;
+    line-height: 1.7;
+    color: var(--ink);
+  }
+
+  /* --- Reminder / reference panel --- */
+  .reminder-panel {
+    background: var(--signal-soft);
+    border: 1px solid var(--signal);
+    border-radius: 4px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .reminder-toggle {
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 10px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--signal);
+  }
+  .reminder-toggle:hover { border-color: transparent; color: var(--signal); }
+  .reminder-body {
+    padding: 0 18px 16px 18px;
+    font-family: var(--font-serif);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+  .reminder-body p { margin: 0 0 10px 0; }
+  .reminder-body p:last-child { margin-bottom: 0; }
+  .reminder-body strong { color: var(--ink); }
+  .reminder-def {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .reminder-def .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    margin-top: 6px; flex-shrink: 0;
+  }
+  .reminder-def.detected .dot { background: var(--signal); }
+  .reminder-def.ambiguous .dot { background: var(--ambiguous); }
+  .reminder-def.none .dot { background: var(--none); }
+
+  .judgment-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .judgment-btn {
+    flex: 1;
+    min-width: 160px;
+    padding: 16px 14px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .judgment-btn .key-hint {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 400;
+  }
+  .judgment-btn .label { font-size: 13px; font-weight: 600; }
+
+  .judgment-btn.detected.selected {
+    background: var(--signal-soft); border-color: var(--signal); color: var(--signal);
+  }
+  .judgment-btn.ambiguous.selected {
+    background: var(--ambiguous-soft); border-color: var(--ambiguous); color: var(--ambiguous);
+  }
+  .judgment-btn.none.selected {
+    background: var(--none-soft); border-color: var(--none); color: var(--none);
+  }
+
+  .note-input {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface);
+    margin-bottom: 20px;
+  }
+  .note-input:focus { outline: 2px solid var(--signal); outline-offset: -1px; }
+
+  .nav-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .shortcuts-hint {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* --- Complete screen --- */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .summary-stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 18px;
+    text-align: center;
+  }
+  .summary-stat .num { font-size: 28px; font-weight: 600; font-family: var(--font-mono); }
+  .summary-stat .label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .summary-stat.detected .num { color: var(--signal); }
+  .summary-stat.ambiguous .num { color: var(--ambiguous); }
+  .summary-stat.none .num { color: var(--none); }
+
+  .rate-banner {
+    background: var(--ink);
+    color: var(--bg);
+    border-radius: 4px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+  }
+  .rate-banner .rate-num { font-size: 32px; font-weight: 600; }
+  .rate-banner .rate-label { font-size: 12px; opacity: 0.75; margin-top: 4px; }
+
+  .status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--signal);
+    margin-right: 6px;
+  }
+  .save-status { font-size: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="container" id="app"></div>
+
+<script>
+// ============================================================================
+// H5 Blind Detection Review Tool
+// The Agentic Data Contract — Experiment 1b: Dithering
+//
+// Standalone HTML file, opened directly in your own browser (not a Claude.ai
+// in-chat artifact) — so this uses standard browser localStorage rather than
+// a Claude-specific storage bridge, which would not exist in this context.
+//
+// Design principle: true blind review. record_id and condition_id are hidden
+// from view during judging and revealed only in the final export, so
+// knowledge of which experimental condition produced a sample can never
+// unconsciously prime the reviewer's judgment. Presentation order is
+// randomized once at session start for the same reason.
+// ============================================================================
+
+const STORAGE_KEY = 'h5_blind_review_session_v1';
+
+let state = {
+  screen: 'setup',   // 'setup' | 'review' | 'complete'
+  samples: [],       // [{sample_id, record_id, condition_id, decision_reasoning}]
+  judgments: {},     // {sample_id: {judgment, note, timestamp}}
+  currentIndex: 0,
+  reminderExpanded: true,  // persists across the session once toggled
+};
+
+const DEMO_SAMPLES = [
+  { sample_id: 'demo_1', record_id: 'DEMO_001', condition_id: 'demo_condition',
+    decision_reasoning: "Customer shows strong engagement with high NPS and recent purchase activity, suggesting continued high-value status. Recommend standard monitoring." },
+  { sample_id: 'demo_2', record_id: 'DEMO_002', condition_id: 'demo_condition',
+    decision_reasoning: "The churn risk score and last purchase date don't seem to align with the customer's segment classification. Prioritizing based on the risk signal, but this profile looks inconsistent." },
+  { sample_id: 'demo_3', record_id: 'DEMO_003', condition_id: 'demo_condition',
+    decision_reasoning: "Low support ticket volume combined with steady purchase frequency indicates a stable, low-maintenance account. No immediate action needed." },
+  { sample_id: 'demo_4', record_id: 'DEMO_004', condition_id: 'demo_condition',
+    decision_reasoning: "This customer's profile is unusual — high lifetime value alongside very low engagement metrics is an atypical combination that doesn't fit the usual pattern." },
+  { sample_id: 'demo_5', record_id: 'DEMO_005', condition_id: 'demo_condition',
+    decision_reasoning: "Moderate spend and average NPS place this account in the standard tier. Recommend routine follow-up per normal cadence." },
+];
+
+// ============================================================================
+// STORAGE — plain browser localStorage (see note above on why not window.storage)
+// ============================================================================
+
+function saveSession() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    flashSaveStatus();
+  } catch (e) {
+    console.error('Save failed:', e);
+  }
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.error('Load failed:', e);
+    return null;
+  }
+}
+
+function clearSession() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+function flashSaveStatus() {
+  const el = document.getElementById('save-status');
+  if (el) {
+    el.textContent = 'saved ✓';
+    setTimeout(() => { if (el) el.textContent = 'auto-saves as you go'; }, 1200);
+  }
+}
+
+// ============================================================================
+// UTILITY
+// ============================================================================
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function signalLineSvg() {
+  return `<div class="signal-line"><svg viewBox="0 0 400 32" preserveAspectRatio="none">
+    <path d="M0,16 L30,16 L36,6 L42,26 L48,16 L400,16" />
+  </svg></div>`;
+}
+
+// ============================================================================
+// SETUP SCREEN
+// ============================================================================
+
+function renderSetup() {
+  const existing = loadSession();
+  const hasResumable = existing && existing.samples && existing.samples.length > 0
+    && Object.keys(existing.judgments || {}).length < existing.samples.length;
+
+  let resumeHtml = '';
+  if (hasResumable) {
+    const done = Object.keys(existing.judgments).length;
+    const total = existing.samples.length;
+    resumeHtml = `
+      <div class="resume-banner">
+        <span>A previous session is in progress — <strong>${done} of ${total}</strong> reviewed.</span>
+        <div class="btn-row">
+          <button class="primary" onclick="resumeSession()">Resume</button>
+          <button onclick="discardSession()">Start fresh instead</button>
+        </div>
+      </div>`;
+  }
+
+  document.getElementById('app').innerHTML = `
+    ${signalLineSvg()}
+    <h1>H5 Blind Detection Review</h1>
+    <p class="subtitle">The Agentic Data Contract — Experiment 1b: Dithering<br>
+    Manual audit of the frozen keyword list's false-negative rate</p>
+
+    ${resumeHtml}
+
+    <div class="setup-card">
+      <div class="setup-instructions">
+        You'll see one reasoning excerpt at a time — <strong>nothing else</strong>.
+        No condition label, no record ID, no context about what was dithered.
+        Judge only whether the text shows <strong>any sign</strong> the agent
+        noticed something unusual, implausible, or inconsistent about the
+        data — using your own reading, not the frozen keyword list.
+        <br><br>
+        Samples are presented in random order. record_id and condition_id
+        are revealed only in the final export, once every judgment is locked in.
+      </div>
+
+      <textarea id="paste-input" placeholder='Paste the exported JSON array here, e.g.:
+[
+  { "sample_id": "s1", "record_id": "REC_...", "condition_id": "h3_pair1_...", "decision_reasoning": "..." },
+  ...
+]'></textarea>
+
+      <div class="btn-row">
+        <button class="primary" onclick="beginReviewFromPaste()">Begin review</button>
+        <button onclick="beginReviewDemo()">Load demo data (5 samples)</button>
+      </div>
+      <div class="demo-note">Demo data is for previewing the tool only — not real evaluator output.</div>
+    </div>
+  `;
+}
+
+function beginReviewFromPaste() {
+  const raw = document.getElementById('paste-input').value.trim();
+  if (!raw) { alert('Paste the exported sample JSON first, or use the demo data.'); return; }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    alert('Could not parse that as JSON. Check the format and try again.');
+    return;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    alert('Expected a non-empty JSON array of samples.');
+    return;
+  }
+  startReview(parsed);
+}
+
+function beginReviewDemo() {
+  startReview(DEMO_SAMPLES);
+}
+
+function startReview(samples) {
+  state = {
+    screen: 'review',
+    samples: shuffle(samples),
+    judgments: {},
+    currentIndex: 0,
+    reminderExpanded: true,
+  };
+  saveSession();
+  render();
+}
+
+function resumeSession() {
+  const existing = loadSession();
+  if (existing) {
+    state = existing;
+    // Jump to first unjudged sample
+    state.currentIndex = state.samples.findIndex(s => !(s.sample_id in state.judgments));
+    if (state.currentIndex === -1) state.screen = 'complete';
+    else state.screen = 'review';
+    render();
+  }
+}
+
+function discardSession() {
+  if (confirm('This will erase the in-progress session. Continue?')) {
+    clearSession();
+    render();
+  }
+}
+
+// ============================================================================
+// REVIEW SCREEN
+// ============================================================================
+
+function renderReview() {
+  const total = state.samples.length;
+  const doneCount = Object.keys(state.judgments).length;
+  const idx = state.currentIndex;
+  const sample = state.samples[idx];
+  const existingJudgment = state.judgments[sample.sample_id];
+  const pctDone = Math.round((doneCount / total) * 100);
+
+  document.getElementById('app').innerHTML = `
+    ${signalLineSvg()}
+    <div class="progress-row">
+      <span>${String(idx + 1).padStart(3, '0')} / ${total}</span>
+      <span id="save-status" class="save-status">auto-saves as you go</span>
+      <span>${doneCount} judged</span>
+    </div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" style="width:${pctDone}%"></div>
+    </div>
+
+    <div class="reminder-panel">
+      <button class="reminder-toggle" onclick="toggleReminder()">
+        <span>Reminder — what am I judging?</span>
+        <span>${state.reminderExpanded ? '▾ hide' : '▸ show'}</span>
+      </button>
+      ${state.reminderExpanded ? `
+      <div class="reminder-body">
+        <p><strong>The key distinction:</strong> we're not measuring whether the
+        agent was <em>uncertain about its decision</em> — confidence scores and
+        baseline stability already capture that elsewhere in the experiment.
+        We're measuring whether the agent showed any sign it doubted the
+        <strong>data itself</strong> — as if something about the inputs didn't
+        quite add up.</p>
+
+        <div class="reminder-def detected">
+          <span class="dot"></span>
+          <span><strong>Clear detection</strong> — the reasoning explicitly
+          points at the data looking wrong, inconsistent, implausible, or
+          unusual in some way.</span>
+        </div>
+        <div class="reminder-def ambiguous">
+          <span class="dot"></span>
+          <span><strong>Ambiguous</strong> — something reads as slightly off,
+          but it's unclear whether it's about the data or just general
+          hedging about which tier to pick.</span>
+        </div>
+        <div class="reminder-def none">
+          <span class="dot"></span>
+          <span><strong>No detection</strong> — nothing suggests the agent
+          noticed anything unusual about the inputs.</span>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <div class="reasoning-card">
+      <div class="reasoning-text">${escapeHtml(sample.decision_reasoning)}</div>
+    </div>
+
+    <div class="judgment-row">
+      <button class="judgment-btn detected ${existingJudgment?.judgment === 'detected' ? 'selected' : ''}"
+              onclick="setJudgment('detected')">
+        <span class="key-hint">1</span>
+        <span class="label">Clear detection</span>
+      </button>
+      <button class="judgment-btn ambiguous ${existingJudgment?.judgment === 'ambiguous' ? 'selected' : ''}"
+              onclick="setJudgment('ambiguous')">
+        <span class="key-hint">2</span>
+        <span class="label">Ambiguous / possible signal</span>
+      </button>
+      <button class="judgment-btn none ${existingJudgment?.judgment === 'none' ? 'selected' : ''}"
+              onclick="setJudgment('none')">
+        <span class="key-hint">3</span>
+        <span class="label">No detection</span>
+      </button>
+    </div>
+
+    <input type="text" class="note-input" id="note-input"
+           placeholder="Optional note — why? (not required)"
+           value="${existingJudgment?.note ? escapeHtml(existingJudgment.note) : ''}"
+           onchange="updateNote()">
+
+    <div class="nav-row">
+      <button onclick="goBack()" ${idx === 0 ? 'disabled' : ''}>← Back</button>
+      <span class="shortcuts-hint">keys: 1 / 2 / 3 to judge · → or Enter for next</span>
+      <button class="primary" onclick="goNext()" ${!existingJudgment ? 'disabled' : ''}>Next →</button>
+    </div>
+  `;
+}
+
+function toggleReminder() {
+  state.reminderExpanded = !state.reminderExpanded;
+  saveSession();
+  render();
+}
+
+function setJudgment(judgment) {
+  const sample = state.samples[state.currentIndex];
+  const existing = state.judgments[sample.sample_id] || {};
+  state.judgments[sample.sample_id] = {
+    judgment,
+    note: existing.note || '',
+    timestamp: new Date().toISOString(),
+  };
+  saveSession();
+  render();
+}
+
+function updateNote() {
+  const sample = state.samples[state.currentIndex];
+  const noteVal = document.getElementById('note-input').value;
+  if (state.judgments[sample.sample_id]) {
+    state.judgments[sample.sample_id].note = noteVal;
+    saveSession();
+  }
+}
+
+function goBack() {
+  if (state.currentIndex > 0) {
+    state.currentIndex -= 1;
+    render();
+  }
+}
+
+function goNext() {
+  const sample = state.samples[state.currentIndex];
+  if (!state.judgments[sample.sample_id]) return; // must judge before advancing
+
+  if (state.currentIndex < state.samples.length - 1) {
+    state.currentIndex += 1;
+    saveSession();
+    render();
+  } else {
+    // Last sample judged — check if everything is done
+    const allDone = state.samples.every(s => s.sample_id in state.judgments);
+    if (allDone) {
+      state.screen = 'complete';
+      saveSession();
+      render();
+    }
+  }
+}
+
+// Keyboard shortcuts during review
+document.addEventListener('keydown', (e) => {
+  if (state.screen !== 'review') return;
+  if (e.key === '1') setJudgment('detected');
+  else if (e.key === '2') setJudgment('ambiguous');
+  else if (e.key === '3') setJudgment('none');
+  else if (e.key === 'ArrowRight' || e.key === 'Enter') goNext();
+  else if (e.key === 'ArrowLeft') goBack();
+});
+
+// ============================================================================
+// COMPLETE SCREEN
+// ============================================================================
+
+function renderComplete() {
+  const total = state.samples.length;
+  const counts = { detected: 0, ambiguous: 0, none: 0 };
+  state.samples.forEach(s => {
+    const j = state.judgments[s.sample_id];
+    if (j) counts[j.judgment] = (counts[j.judgment] || 0) + 1;
+  });
+
+  const missedRate = ((counts.detected + counts.ambiguous) / total * 100).toFixed(1);
+
+  document.getElementById('app').innerHTML = `
+    ${signalLineSvg()}
+    <h1>Review Complete</h1>
+    <p class="subtitle">${total} samples judged, blind, in random order.</p>
+
+    <div class="summary-grid">
+      <div class="summary-stat detected">
+        <div class="num">${counts.detected}</div>
+        <div class="label">Clear detection</div>
+      </div>
+      <div class="summary-stat ambiguous">
+        <div class="num">${counts.ambiguous}</div>
+        <div class="label">Ambiguous</div>
+      </div>
+      <div class="summary-stat none">
+        <div class="num">${counts.none}</div>
+        <div class="label">No detection</div>
+      </div>
+    </div>
+
+    <div class="rate-banner">
+      <div class="rate-num">${missedRate}%</div>
+      <div class="rate-label">of zero-hit samples show possible detection language the
+      frozen keyword list missed (clear + ambiguous combined, out of ${total} reviewed)</div>
+    </div>
+
+    <div class="btn-row">
+      <button class="primary" onclick="exportResults()">Export results (JSON)</button>
+      <button onclick="startNewSession()">Start a new review</button>
+    </div>
+  `;
+}
+
+function exportResults() {
+  const results = state.samples.map(s => ({
+    sample_id: s.sample_id,
+    record_id: s.record_id,
+    condition_id: s.condition_id,
+    decision_reasoning: s.decision_reasoning,
+    judgment: state.judgments[s.sample_id]?.judgment || null,
+    note: state.judgments[s.sample_id]?.note || '',
+    timestamp: state.judgments[s.sample_id]?.timestamp || null,
+  }));
+
+  const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `h5_blind_review_results_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function startNewSession() {
+  if (confirm('Start a new review? This clears the current completed session.')) {
+    clearSession();
+    state = { screen: 'setup', samples: [], judgments: {}, currentIndex: 0, reminderExpanded: true };
+    render();
+  }
+}
+
+// ============================================================================
+// RENDER DISPATCH
+// ============================================================================
+
+function render() {
+  if (state.screen === 'setup') renderSetup();
+  else if (state.screen === 'review') renderReview();
+  else if (state.screen === 'complete') renderComplete();
+}
+
+// Init: check for existing session on load
+(function init() {
+  const existing = loadSession();
+  if (existing && existing.samples && existing.samples.length > 0) {
+    state = existing;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

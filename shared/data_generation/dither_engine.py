@@ -515,48 +515,129 @@ class DitherEngine:
 
 
 # ============================================================================
-# PREDEFINED CONDITIONS — maps to 1b hypotheses
+# PREDEFINED CONDITIONS — maps to 1b hypotheses, per 1b_DESIGN_AMENDMENT_1.md
 # ============================================================================
+#
+# Condition counts per the amendment (H4 reduced from 6 to 3 — see below):
+#   H1: 12   H2: 12   H3: 11   H4: 3   H7: 4   H8a: 2   H8b: 0-1 (conditional)
+#   Total: 44-45 (was 47-48 in the amendment before the H2/H4 reuse decision
+#   below was locked at build time)
 
 def build_h1_conditions(seed: int = 42) -> List[DitherConfig]:
-    """H1 — Field Importance: 5 individual top fields + identity aggregate + behavioral aggregate"""
+    """
+    H1 — Field Importance Validation (restructured per amendment).
+
+    12 conditions: 5 individual H4-top-5 fields, 6 category-level
+    conditions (field lists corrected against actual engine capability —
+    see PROTECTED_FIELDS and the amendment's "A Note on Protected Fields
+    and Boolean Support"), and 1 distributed condition.
+    """
+    conditions = []
+
+    # --- 5 individual fields (1a's H4 top-5) ---
     h4_top5 = ["last_purchase_days_ago", "churn_risk_score", "nps_score",
-                "lifetime_value_estimate", "support_tickets_open"]
-    conditions = [
-        DitherConfig(fields=[f], magnitude=0.15, dither_type=["drift"],
-                     correlated=True, seed=seed+i, condition_id=f"h1_individual_{f}")
-        for i, f in enumerate(h4_top5)
-    ]
+               "lifetime_value_estimate", "support_tickets_open"]
+    for i, f in enumerate(h4_top5):
+        conditions.append(DitherConfig(
+            fields=[f], magnitude=0.15, dither_type=["drift"], correlated=True,
+            seed=seed + i, condition_id=f"h1_individual_{f}"))
+
+    # --- 6 category-level conditions (engine-verified field lists) ---
+    # dob excluded from identity — not currently dither-capable (no defined
+    # magnitude/tier behavior for a date-of-birth field)
     conditions.append(DitherConfig(
-        fields=["name", "email", "phone"], magnitude=0.15, dither_type=["drift"],
-        correlated=False, seed=seed+10, condition_id="h1_aggregate_identity"))
-    conditions.append(DitherConfig(
-        fields=["email_open_rate", "avg_order_value", "tenure_months",
-                "payment_failures", "fraud_risk_score"],
+        fields=["name", "email", "phone", "address"],
         magnitude=0.15, dither_type=["drift"], correlated=False,
-        seed=seed+11, condition_id="h1_aggregate_behavioral"))
+        seed=seed + 20, condition_id="h1_category_identity"))
+
+    conditions.append(DitherConfig(
+        fields=["total_purchases", "total_spend", "avg_order_value",
+                "purchase_frequency_days", "last_purchase_days_ago",
+                "lifetime_value_estimate"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 21, condition_id="h1_category_purchase_behavior"))
+
+    conditions.append(DitherConfig(
+        fields=["nps_score", "email_open_rate", "last_login_days_ago",
+                "support_tickets_open", "support_tickets_closed",
+                "avg_resolution_time_hours"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 22, condition_id="h1_category_engagement"))
+
+    conditions.append(DitherConfig(
+        fields=["churn_risk_score", "payment_failures", "fraud_risk_score",
+                "refund_rate"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 23, condition_id="h1_category_risk_factors"))
+
+    # customer_segment excluded (protected, upstream field)
+    # preferred_categories excluded (variable-length list, deferred)
+    conditions.append(DitherConfig(
+        fields=["acquisition_channel", "tenure_months"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 24, condition_id="h1_category_segmentation"))
+
+    # is_at_risk, recently_contacted_support excluded (protected, derived)
+    conditions.append(DitherConfig(
+        fields=["is_vip", "has_active_subscription", "has_pending_order"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 25, condition_id="h1_category_account_status"))
+
+    # --- 1 distributed condition — deliberately excludes H4 top-5 ---
+    conditions.append(DitherConfig(
+        fields=["email", "avg_order_value", "last_login_days_ago",
+                "refund_rate", "acquisition_channel", "has_pending_order"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 30, condition_id="h1_distributed"))
+
     return conditions
 
 
-def build_h2_conditions(field: str = "churn_risk_score", seed: int = 42) -> List[DitherConfig]:
-    """H2 — Magnitude Effects: four magnitude levels for one field"""
-    return [
-        DitherConfig(fields=[field], magnitude=mag, dither_type=["drift"],
-                     correlated=True, seed=seed+i,
-                     condition_id=f"h2_{field}_mag{int(mag*100)}pct")
-        for i, mag in enumerate([0.05, 0.15, 0.40, 1.00])
-    ]
+def build_h2_conditions(seed: int = 42) -> List[DitherConfig]:
+    """
+    H2 — Magnitude Effects (restructured per amendment).
+
+    12 conditions: 3 fields (churn_risk_score, total_spend, tenure_months)
+    x 4 magnitude levels (5%, 15%, 40%, 100%).
+
+    Seed scheme is deliberately structured (base + field_offset + mag_index)
+    so that each field's mag15pct seed is stable and referenceable — H4's
+    drift-type conditions for these same 3 fields are NOT regenerated
+    separately; they reuse these exact mag15pct conditions by condition_id.
+    See build_h4_conditions() docstring.
+    """
+    fields = ["churn_risk_score", "total_spend", "tenure_months"]
+    magnitudes = [0.05, 0.15, 0.40, 1.00]
+
+    conditions = []
+    for field_idx, field in enumerate(fields):
+        for mag_idx, mag in enumerate(magnitudes):
+            conditions.append(DitherConfig(
+                fields=[field], magnitude=mag, dither_type=["drift"],
+                correlated=True,
+                seed=seed + field_idx * 10 + mag_idx,
+                condition_id=f"h2_{field}_mag{int(mag*100)}pct"))
+    return conditions
 
 
 def build_h3_conditions(seed: int = 42) -> List[DitherConfig]:
-    """H3 — Internal Consistency: 3 pairs + 1 triplet, correlated vs uncorrelated"""
+    """
+    H3 — Internal Consistency (restructured per amendment).
+
+    11 conditions: 3 correlated field pairs + 1 triplet, each tested
+    correlated vs. uncorrelated (8 conditions); 2 new individual-field
+    conditions to complete 2x2 directionality for pair 3 and the reference
+    pair; 1 uncorrelated reference pair (genuinely independent fields, no
+    "correlated" arm since there's no real correlation to respect).
+    """
+    conditions = []
+
     field_sets = [
         (["churn_risk_score", "last_purchase_days_ago"], "pair1_churn_purchase"),
         (["total_spend", "lifetime_value_estimate"],     "pair2_spend_ltv"),
         (["support_tickets_open", "avg_resolution_time_hours"], "pair3_support"),
         (["total_spend", "last_purchase_days_ago", "support_tickets_open"], "triplet"),
     ]
-    conditions = []
     for i, (fields, name) in enumerate(field_sets):
         for j, correlated in enumerate([True, False]):
             suffix = "correlated" if correlated else "uncorrelated"
@@ -564,19 +645,205 @@ def build_h3_conditions(seed: int = 42) -> List[DitherConfig]:
                 fields=fields, magnitude=0.15, dither_type=["drift"],
                 correlated=correlated,
                 recompute_derived=not correlated,
-                seed=seed + i*2 + j,
+                seed=seed + i * 2 + j,
                 condition_id=f"h3_{name}_{suffix}"))
+
+    # Individual conditions to complete the 2x2 directionality check.
+    # (churn_risk_score, last_purchase_days_ago, total_spend,
+    # lifetime_value_estimate, support_tickets_open all already exist
+    # individually via H1/H2 — only these two are new.)
+    conditions.append(DitherConfig(
+        fields=["avg_resolution_time_hours"], magnitude=0.15,
+        dither_type=["drift"], correlated=True,
+        seed=seed + 100, condition_id="h3_individual_avg_resolution_time_hours"))
+    conditions.append(DitherConfig(
+        fields=["refund_rate"], magnitude=0.15,
+        dither_type=["drift"], correlated=True,
+        seed=seed + 101, condition_id="h3_individual_refund_rate"))
+
+    # Uncorrelated reference pair — genuinely independent fields (verified:
+    # neither is segment-conditioned, neither derives from the other).
+    # No "correlated" arm — there's no real correlation to respect.
+    conditions.append(DitherConfig(
+        fields=["avg_resolution_time_hours", "refund_rate"],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed + 102, condition_id="h3_reference_uncorrelated"))
+
     return conditions
 
 
-def build_h4_conditions(field: str = "churn_risk_score", seed: int = 42) -> List[DitherConfig]:
-    """H4 — Dither Type: drift vs entry_error at matched magnitude"""
+def build_h4_conditions(seed: int = 42) -> List[DitherConfig]:
+    """
+    H4 — Dither Type Effects (restructured per amendment; reuse decision
+    locked at build time).
+
+    3 NEW conditions (entry_error only) across the same 3 fields H2 uses
+    (churn_risk_score, total_spend, tenure_months). The "drift" arm of
+    H4's comparison is NOT regenerated — it is served directly by H2's
+    existing 15%-magnitude conditions for these same fields
+    (h2_churn_risk_score_mag15pct, h2_total_spend_mag15pct,
+    h2_tenure_months_mag15pct), which use identical field/magnitude/type/
+    correlated parameters. Generating a separate, differently-seeded
+    "drift" condition here would mean running the agent against two
+    statistically-equivalent-but-not-identical datasets purely to answer
+    the same comparison twice — real wasted API spend for no analytical
+    benefit. The evaluator's H4 analysis must reference
+    h2_{field}_mag15pct's decisions directly as the "drift" data point
+    for each field, alongside these 3 new "entry_error" conditions.
+    """
+    fields = ["churn_risk_score", "total_spend", "tenure_months"]
     return [
-        DitherConfig(fields=[field], magnitude=0.15, dither_type=[dt],
-                     correlated=True, seed=seed+i,
-                     condition_id=f"h4_{field}_{dt}")
-        for i, dt in enumerate(["drift", "entry_error"])
+        DitherConfig(fields=[f], magnitude=0.15, dither_type=["entry_error"],
+                     correlated=True, seed=seed + i,
+                     condition_id=f"h4_{f}_entry_error")
+        for i, f in enumerate(fields)
     ]
+
+
+def build_h7_conditions(seed: int = 42) -> List[DitherConfig]:
+    """
+    H7 — Breadth Effects (new hypothesis per amendment).
+
+    4 conditions: a fixed accumulation ladder (1 field -> 3 -> 6 -> 11),
+    each step adding to the previous rather than swapping to unrelated
+    fields, so results form a genuine accumulation curve.
+
+    h7_breadth_all's 11-field list (locked at build time, per the
+    amendment's deferred placeholder) deliberately spans all six prompt
+    categories rather than concentrating within the fields already used
+    in the 6-field step — so "breadth" measures touching many kinds of
+    data, not just piling up more fields within the same category:
+      Risk:              churn_risk_score
+      Purchase Behavior: last_purchase_days_ago, lifetime_value_estimate,
+                         total_spend
+      Engagement:        nps_score, support_tickets_open,
+                         avg_resolution_time_hours
+      Identity:          email
+      Segmentation:      tenure_months, acquisition_channel
+      Account Status:    is_vip
+    """
+    return [
+        DitherConfig(
+            fields=["churn_risk_score"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed, condition_id="h7_breadth_1field"),
+
+        DitherConfig(
+            fields=["churn_risk_score", "last_purchase_days_ago", "nps_score"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed + 1, condition_id="h7_breadth_3fields"),
+
+        DitherConfig(
+            fields=["churn_risk_score", "last_purchase_days_ago", "nps_score",
+                    "lifetime_value_estimate", "support_tickets_open", "total_spend"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed + 2, condition_id="h7_breadth_6fields"),
+
+        DitherConfig(
+            fields=["churn_risk_score", "last_purchase_days_ago", "nps_score",
+                    "lifetime_value_estimate", "support_tickets_open", "total_spend",
+                    "email", "tenure_months", "acquisition_channel", "is_vip",
+                    "avg_resolution_time_hours"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed + 3, condition_id="h7_breadth_all"),
+    ]
+
+
+def build_h8a_conditions(seed: int = 42) -> List[DitherConfig]:
+    """
+    H8a — Category-Level Interaction (new hypothesis per amendment).
+
+    2 conditions. Field lists mirror the corresponding H1 category
+    conditions exactly, so the "alone" comparison points for the additive-
+    baseline formula come directly from h1_category_identity,
+    h1_category_account_status, h1_category_purchase_behavior, and
+    h1_category_risk_factors — no separate individual-category conditions
+    needed here.
+
+    Pair 1 (Identity + Account Status): predicted null / negative control.
+    Pair 2 (Purchase Behavior + Risk Factors): predicted possible
+    super-additive interaction.
+    """
+    return [
+        DitherConfig(
+            fields=["name", "email", "phone", "address",
+                    "is_vip", "has_active_subscription", "has_pending_order"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed, condition_id="h8a_pair1_identity_account_status"),
+
+        DitherConfig(
+            fields=["total_purchases", "total_spend", "avg_order_value",
+                    "purchase_frequency_days", "last_purchase_days_ago",
+                    "lifetime_value_estimate",
+                    "churn_risk_score", "payment_failures",
+                    "fraud_risk_score", "refund_rate"],
+            magnitude=0.15, dither_type=["drift"], correlated=False,
+            seed=seed + 1, condition_id="h8a_pair2_purchase_risk"),
+    ]
+
+
+def build_h8b_condition(field_a: str, field_b: str, seed: int = 42) -> DitherConfig:
+    """
+    H8b — Field-Level Interaction (new hypothesis per amendment; CONDITIONAL).
+
+    Unlike every other build_h*_conditions() function, this does not run
+    automatically as part of full-pipeline generation. Per the amendment's
+    locked decision rule: h8a_pair2_purchase_risk must be run and analyzed
+    FIRST. Only if its combined drift rate exceeds the additive-baseline
+    prediction (rate_A + rate_B - rate_A*rate_B) by more than 20% relative
+    excess does this condition get generated at all — and field_a/field_b
+    are then the empirically top-drifting individual fields from H1/H2
+    within Purchase Behavior and Risk Factors respectively, NOT a
+    pre-registered guess.
+
+    This function takes the winning fields as parameters rather than
+    hard-coding them, since the whole point of the decision rule is that
+    the fields are determined by H8a's results, not chosen in advance.
+
+    Args:
+        field_a: top-drifting field from Purchase Behavior (from H1/H2 data)
+        field_b: top-drifting field from Risk Factors (from H1/H2 data)
+        seed: random seed for this condition
+    """
+    return DitherConfig(
+        fields=[field_a, field_b],
+        magnitude=0.15, dither_type=["drift"], correlated=False,
+        seed=seed,
+        condition_id=f"h8b_{field_a}_{field_b}")
+
+
+def build_all_conditions(seed: int = 42) -> List[DitherConfig]:
+    """
+    Assemble every unconditional condition (H1, H2, H3, H4, H7, H8a) into
+    one list. H8b is deliberately excluded — it is conditional on H8a's
+    analyzed results and must be generated separately, later, by the
+    orchestration script (generate_dithered_data.py) after checking the
+    additive-baseline threshold.
+
+    Returns 44 conditions total (12+12+11+3+4+2). H8b (0-1 more) is
+    handled outside this function.
+    """
+    return (
+        build_h1_conditions(seed=seed)
+        + build_h2_conditions(seed=seed)
+        + build_h3_conditions(seed=seed)
+        + build_h4_conditions(seed=seed)
+        + build_h7_conditions(seed=seed)
+        + build_h8a_conditions(seed=seed)
+    )
+
+
+def validate_condition_ids_unique(conditions: List[DitherConfig]) -> None:
+    """
+    Sanity check: no two conditions share a condition_id. Run this before
+    generating any data — a collision would silently overwrite one
+    condition's output files with another's.
+    """
+    ids = [c.condition_id for c in conditions]
+    if len(ids) != len(set(ids)):
+        from collections import Counter
+        dupes = [id_ for id_, count in Counter(ids).items() if count > 1]
+        raise ValueError(f"Duplicate condition_id(s) found: {dupes}")
 
 
 # ============================================================================

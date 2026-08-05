@@ -88,9 +88,19 @@ parameter name. Verified against 1,000 synthetic customers at 0.15
 magnitude: 13.5% observed flip rate, well within expected sampling noise of
 the 15% target.
 
+**A finding worth noting, not a flaw to correct**: Boolean fields with skewed base rates produce dramatic population level swings under uniform flip probability dithering, purely as a mathematical consequence of rarity, not an engine defect. `is_vip` in the ground truth data has only a 4.3% True rate (43/1,000 customers, gated to the high_value segment). At 15% flip magnitude, the True population nearly quadruples to 170 customers (131 new False→True flips against only 4 True→False flips). This mirrors a real phenomenon: in any production system, a small uniform per-record corruption rate will always inflate a rare positive class dramatically in relative terms, precisely because there are so many more negatives available to flip into it than positives available to flip out. Deliberately not corrected by scaling flip probability to a field's base rate, doing so would reintroduce the same per-field inconsistent magnitude problem we specifically avoided when rejecting 1/N-scaled flip probability for categorical fields with different option counts. The asymmetry is preserved as a genuine, measurable phenomenon rather than suppressed. See the new attribution analysis below for how it's isolated rather than allowed to contaminate interpretation.
+
 Boolean fields ignore the `dither_type` (drift vs. entry_error) distinction —
 there is no meaningful difference between a boolean "decaying" over time
 versus an automation artifact flipping it, both route to the same flip logic.
+
+**New analysis: per-field and per-direction attribution within multi-field conditions**
+
+The `is_vip` base rate finding above surfaced a gap that applies well beyond one field: H1's original four sub-questions named Question C ("within a category, does one field carry disproportionate weight, or is the category's effect evenly distributed?") but no clean mechanism existed to actually answer it for any category. Individual field testing only exists for fields that happen to also be H4 top-5 or H2 fields, not systematically for every category.
+
+This is resolved as a **free analysis**, not a new condition. Every multi-field condition already dithers its fields uncorrelated (each field independently rolls its own perturbation), and the `_dither_fields` metadata already captured per customer records exactly which specific field(s) were actually touched for that customer. The evaluator will use this to cross-tabulate drift rate by which specific field(s) changed within every multi-field condition, answering Question C for all six H1 categories, h8a pairs, and h7 breadth conditions at zero additional API cost.
+
+**For boolean fields specifically, this attribution is extended to include direction** (False→True vs. True→False), not just whether the field changed. This directly answers the more interesting question the `is_vip` finding actually raises: does flipping a non-VIP customer to VIP status move the agent's decision differently than flipping a real VIP down to non-VIP? That's a legitimate behavioral question about the agent, not a confound to control away, and it's answerable from data already being generated.
 
 ### Derived and upstream fields: protected, not built
 
@@ -126,17 +136,9 @@ mechanism, only a new **analysis lens**.
 
 ### New cross-cutting analysis: segment/profile mismatch
 
-For any condition that dithers numeric fields, the evaluator will check
-whether a customer's dithered profile still falls within their original
-`customer_segment`'s typical generation range (cross-referenced against the
-base generator's `_generate_segment_fields()` logic) and flag customers
-whose profile has effectively "left" their assigned segment's normal
-territory. This is a free enrichment across H1, H2, H4, and H7 or anywhere a
-numeric field gets dithered. This is not a new hypothesis or new engine mechanism.
-**A dedicated visualization specifically highlighting segment/profile-
-mismatch records is worth considering** for the eventual research write-up,
-given how directly it visualizes "how far can we push a customer's data
-before it stops looking like the segment it's labeled as."
+For any condition that dithers numeric fields, the evaluator will check whether a customer's dithered profile still falls within their original `customer_segment`'s typical range and flag customers whose profile has effectively "left" their assigned segment's normal territory. **Computed empirically from the 1,000-customer ground truth dataset itself** (e.g. 5th–95th percentile per field per segment, grouped directly from `canonical_customers.json`), not by extracting the generator's internal literal bounds, which would require a refactor and would create a second, driftable source of truth. This is a free enrichment across H1, H2, H4, and H7, anywhere a numeric field gets dithered, not a new hypothesis or new engine mechanism.
+
+**The same concept extends to boolean fields.** `is_vip=True` while `customer_segment != high_value` after dithering is a categorical instance of the identical phenomenon. Specifically, a dithered attribute no longer matching what the customer's protected, undithered segment assignment would predict. Folded into this same lens rather than treated as a separate concept.
 
 ### `preferred_categories`: a distinct, smaller deferral
 
@@ -525,65 +527,103 @@ Not a single number. Cross-tabbed three ways per condition:
 
 ### Original design
 
-Cross-cutting: uses the `stable` / `lightly_boundary` / `deeply_boundary`
+Cross-cutting: uses the `stable` / `lightly_boundary` / `deeply_boundary` 
 classification from `aggregate_baseline.py`, broken out per condition.
 
-**Terminology clarification:** "tiers" in H6 refers to this stability
-classification (how consistently the agent decided across 5 baseline runs),
-not to the HIGH/MEDIUM/LOW decision itself. A customer can be `stable` and
-always land on any of the three priority levels. Stability is about
-consistency of decision-making, independent of which decision was made.
+**Terminology clarification:** "tiers" in H6 refers to this stability 
+classification (how consistently the agent decided across the primary 
+5 baseline runs), not to the HIGH/MEDIUM/LOW decision itself. A customer 
+can be `stable` and always land on any of the three priority levels. 
+Stability is about consistency of decision-making, independent of which decision was made.
 
 ### What stress-testing resolved
 
-**Multiple comparisons.** 48 conditions × 3 tiers is up to 144 individual
-rate calculations. Declaring any single cell "significant" risks chance
-inflation. **Resolution:** the headline finding is whether the *ordering*
-(deeply_boundary drift rate > lightly_boundary > stable) holds *consistently
-across most of the 48 conditions*. A repeated pattern is hard to get by
-chance; a single cell in isolation is not strong evidence on its own.
+**Multiple comparisons.** 48 conditions × 3 tiers is up to 144 individual rate calculations. 
+Declaring any single cell "significant" risks chance inflation. 
 
-**"Disproportionate" quantified.** Defined as the ratio of drift rates
-between tiers, computed per condition, with the **median ratio across all 48
-conditions** as the headline number rather than any single condition's ratio.
-Fisher's exact test (better suited than chi-square for small cells) used as a
-per-condition check; the overall claim rests on consistency of the median
-ratio and how often the ordering holds, not on per-cell statistical
-significance.
+**Resolution:** the headline finding is whether the *ordering* (deeply_boundary 
+drift rate > lightly_boundary > stable) holds *consistently across most of the 
+48 conditions*, a repeated pattern is hard to get by chance. 
+A single cell in isolation is not strong evidence on its own.
 
-**Small `deeply_boundary` sample size.** A 3/2 split from 5 draws is a wide
-uncertainty read. A true 50/50 customer and a true 60/40-leaning customer
-could both plausibly produce 3/2. **Resolution:** expand baseline runs for
-`deeply_boundary` customers specifically (not the other tiers, and not the
-ground-truth majority vote used elsewhere, which stays locked at 5 runs for
-comparability) to a **minimum of 25 runs**, with the exact final number
-confirmed once the real `deeply_boundary` population size is known from
-actual baseline data. Cost at this population size (likely 50–100 customers)
-is negligible even at 25–40 runs. This is a supplementary diagnostic, not a
-replacement for the primary 5-run baseline.
+**"Disproportionate" quantified.** Defined as the ratio of drift rates between tiers, 
+computed per condition, with the **median ratio across all 48 conditions** as the 
+headline number rather than any single condition's ratio. Fisher's exact test 
+(better suited than chi-square for small cells) used as a per-condition check. 
+The overall claim rests on consistency of the median ratio and how often the ordering holds, 
+not on per-cell statistical significance.
 
-**General fragility vs. field-specific sensitivity.** The most important
-open question: are boundary customers vulnerable to dithering *in general*, or
-specifically to the field that made them boundary in the first place? This
-distinguishes "boundary customers are fundamentally fragile decision
-subjects" from "boundary customers are predictably sensitive to their one
-borderline signal." **Resolved as a free cross-tabulation**. H1's category
-level drift rankings, cross-referenced against H6's tier-based drift
-breakdown. If boundary customers show elevated drift even under conditions
-dithering categories H1 predicts are low-importance (e.g.
-`h1_category_identity`), that indicates general fragility. If elevated drift
-only appears under already-important fields/categories, that's the more
-mundane predictable-sensitivity story. No new conditions required.
+**Small boundary-tier sample size, and what to do about it.** A 3/2 split (deeply_boundary), 
+or even a 4/1 split (lightly_boundary), from only 5 draws is a wide uncertainty read. 
+Checking the actual Wilson interval width for every possible n=5 outcome confirms this 
+is worse than it first appears: a 4-1 split has a width of 58.8 percentage points, 
+barely tighter than 3-2's 65.2pp, and both sit far above our own ±15pp convergence bar. 
+Even a perfectly consistent 5-0 ("stable") outcome has a width of 43.4pp. The discrete 
+count based tier labels are a cheap triage heuristic, not a statistically precise partition.
+A customer landing in `lightly_boundary` by chance may be nearly as genuinely uncertain 
+as one landing in `deeply_boundary`.
 
-**Confidence without bucket change enrichment**: Same logic as H3, a stable
-customer's confidence may barely move under dither; a boundary customer's
-confidence may swing hard without ever crossing a decision bucket. Reported
-alongside binary drift, not instead of it.
+**Resolution: expand baseline runs for both `deeply_boundary` and `lightly_boundary` customers**
+Not `stable` (for a stable customer every observed run already agrees, so the practical reference 
+decision is unambiguous regardless of abstract statistical uncertainty in the "true" rate), 
+and not the ground truth majority vote used everywhere else in the experiment, which stays 
+locked at the original 5 runs for comparability across all customers and conditions.
+
+Runs are added adaptively, not to a fixed count: batches of 10 additional runs, with a 
+Wilson-score confidence interval computed on the plurality proportion after each batch, 
+recomputed fresh from *all* accumulated runs every time (never locked onto whichever decision 
+led first. A customer's leading decision can and does flip between batches as more data 
+comes in). Convergence is declared once the interval width is ≤30 percentage points (±15), 
+with a hard cap at 60 total runs regardless of convergence. Non-convergence at the cap is 
+itself reported as a finding, "this customer's true tendency could not be resolved to our 
+precision bar even after 60 runs", not silently treated as resolved. Empirically, even a 
+theoretical perfect 50/50 customer converges comfortably before the cap (24.5pp width at n=60), 
+so a "did not converge" outcome should be rare rather than a common fallback.
+
+**What this refined data is for, and what it deliberately is not for.** The primary 5-run vote 
+remains the fixed, uniform yardstick every H1-H8b comparison measures against, deliberately. A `stable` 
+customer (5 runs) and a boundary customer (up to 60 runs) are compared on equal computational 
+footing regardless of how much extra effort went into refining the latter's estimate. Refined 
+data never gets a vote on what counts as ground truth. It is a magnifying glass on the decision, 
+not a replacement for it. Three intended uses:
+
+1. **Primary-vote reliability disclosure**: The rate at which a boundary customer's refined 
+plurality (after convergence or hitting the cap) agrees or disagrees with their original 
+5-run majority vote, honestly reported even if that disagreement rate turns out to be high. 
+A meaningfully high mismatch rate is itself an important, disclosed limitation on how much 
+weight the primary baseline deserves.
+
+2. **A continuous enrichment to H6**: Alongside the discrete 3-tier stability label, drift 
+rate can be reported against each boundary customer's refined plurality *rate* as a 
+continuous measure, a sharper and more statistically grounded version of the boundary 
+vulnerability finding than the coarse tier label alone provides.
+
+3. **A standalone "confidently wrong, round 2" finding**: Where a customer's primary run 
+reported high self-reported confidence on the decision that became their majority vote, 
+but the refined data reveals their true tendency is actually close to a genuine toss-up. 
+A direct extension of experiment 1a's "confidently wrong" theme, surfaced purely from 
+repeated sampling instability, with no dithering involved at all.
+
+**General fragility vs. field-specific sensitivity.** The most important open question: are 
+boundary customers vulnerable to dithering *in general*, or specifically to the field that 
+made them boundary in the first place? This distinguishes "boundary customers are fundamentally 
+fragile decision subjects" from "boundary customers are predictably sensitive to their one 
+borderline signal." **Resolved as a free cross-tabulation**: H1's category level drift rankings, 
+cross referenced against H6's tier based drift breakdown. If boundary customers show elevated 
+drift even under conditions dithering categories H1 predicts are low-importance 
+(e.g. `h1_category_identity`), that indicates general fragility. If elevated drift only 
+appears under already important fields/categories, that's the more mundane predictable 
+sensitivity story. No new conditions required.
+
+**Confidence without bucket change enrichment**, same logic as H3: a stable customer's confidence 
+may barely move under dither; a boundary customer's confidence may swing hard without ever 
+crossing a decision bucket. Reported alongside binary drift, not instead of it.
 
 ### No new conditions
 
-H6 uses the existing 48 conditions plus the deeply_boundary run expansion
-(diagnostic, separate from primary condition generation).
+H6 uses the existing 48 conditions plus the boundary-tier run expansion described above (a diagnostic addition covering both `deeply_boundary` and `lightly_boundary`, separate from primary condition generation).
+
+
 
 ---
 
@@ -699,7 +739,14 @@ generated upfront.
 
 ## Deferred to Phase 2 — Considered, Documented, Not Built
 
-### H9 (reserved, partially resolved) — Field Type Sensitivity
+### H9 (reserved, still fully deferred — one prerequisite cleared) — Field Type Sensitivity
+
+**This hypothesis is NOT being added or promoted in this amendment.** No
+conditions exist for it, no decision rule has been designed, and it remains
+entirely out of 1b's active scope. What changed is narrower and easy to
+misread if skimmed: one of the two original blockers to eventually building
+H9 has been cleared as a side effect of unrelated H1 engine work, nothing
+more.
 
 **Hypothesis:** Fields of different types may carry disproportionate
 decision weight even at "matched magnitude". A boolean flip, a numeric
@@ -822,6 +869,16 @@ At 1a's observed per-record cost (~$0.00232/record): approximately
   free enrichment across H1, H2, H4, H7. `preferred_categories` (variable-
   length list field) identified as a distinct, separately-deferred problem
   from H9's boolean/categorical question.
+- **Ground truth re-reviewed against new dither capability.** Confirmed 
+  `avg_resolution_time_hours` and `refund_rate` (H3's reference pair) are 
+  genuinely segment-independent. Identified that `is_vip`'s skewed 4.3% base 
+  rate produces a ~4x population swing under standard 15% flip dithering. 
+  Documented as a real phenomenon worth measuring, not an engine flaw to 
+  correct. Resolved via two free evaluator side analyses rather than any 
+  generator or engine change: per-field/per-direction attribution within 
+  multi-field conditions (closing H1's previously-unbuilt Question C for 
+  all categories), and empirically-computed (not hard-coded) segment/profile 
+  mismatch detection, now explicitly extended to boolean fields.
 - **H1** restructured: 7 → 12 conditions. Ambiguous "behavioral" aggregate
   replaced with 6 category level conditions matching the prompt's own
   taxonomy, plus 1 distributed condition. Category field lists corrected
@@ -866,9 +923,11 @@ At 1a's observed per-record cost (~$0.00232/record): approximately
   locked now (run H8a first, use existing individual field data to
   empirically select fields if amplification is found), outcome dependent
   field selection rather than a pre-registered guess.
-- **H9** (Field Type Sensitivity) reserved for Phase 2, pending a dither
-  engine extension for probability of flip magnitude on boolean/categorical
-  fields.
+- **H9** (Field Type Sensitivity) remains fully reserved for Phase 2, not
+  added or promoted in this amendment. One of its two original blockers
+  (boolean magnitude support) was cleared as a side effect of unrelated H1
+  engine work; the comparative hypothesis itself has no conditions, no
+  decision rule, and no active scope in 1b.
 - **Seed robustness replication** and **human origin error dither type**
   named explicitly as Phase 2 follow ups.
 - **Agentic self report of missing fields** considered and excluded from the

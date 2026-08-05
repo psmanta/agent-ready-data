@@ -4,17 +4,24 @@ Generate Dithered Data — Experiment 1b: Dithering
 ====================================================
 The Agentic Data Contract · Pillar 1: Authoritative
 
-Generates all data artifacts needed for Experiment 1b:
+Generates all UNCONDITIONAL data artifacts needed for Experiment 1b:
   1. Ground truth dataset (DAMA-validated canonical customers)
   2. Baseline agent input (clean data, stripped for agent consumption)
-  3. All H1-H4 dither condition files (agent input + reference)
+  3. All 44 unconditional dither condition files (agent input + reference)
+     covering H1 (12), H2 (12), H3 (11), H4 (3), H7 (4), H8a (2)
+
+H8b (0-1 conditions) is NOT generated here — it is conditional on agent
+decisions from h8a_pair2_purchase_risk, h1_category_purchase_behavior,
+and h1_category_risk_factors, none of which exist until the agent has
+actually run against this script's output. See check_and_generate_h8b.py,
+which runs AFTER those three conditions have decisions.
 
 Does NOT run the agent — this script only produces the JSONL/JSON
 files. Running the agent against these files is a separate step
 (business_decision_agent.py, run_baseline.sh, run_dither_conditions.sh).
 
 Usage:
-    # Generate everything: ground truth, baseline, and all 21 conditions
+    # Generate everything: ground truth, baseline, and all 44 conditions
     python generate_dithered_data.py --n 1000 --seed 42
 
     # Generate only ground truth + baseline (skip dither conditions)
@@ -45,10 +52,8 @@ from validate_dama_dimensions import run_audit
 from dither_engine import (
     DitherEngine,
     DitherConfig,
-    build_h1_conditions,
-    build_h2_conditions,
-    build_h3_conditions,
-    build_h4_conditions,
+    build_all_conditions,
+    validate_condition_ids_unique,
     save_dithered_condition,
     save_dither_reference,
 )
@@ -245,27 +250,34 @@ def generate_all_conditions(
     only_condition: str = None,
 ) -> None:
     """
-    Generate agent input + reference files for all H1-H4 dither conditions.
-    If only_condition is specified, regenerate just that one condition
-    (useful for debugging without regenerating all 21).
+    Generate agent input + reference files for all 44 unconditional H1,
+    H2, H3, H4, H7, H8a dither conditions. If only_condition is specified,
+    regenerate just that one condition (useful for debugging without
+    regenerating all 44).
+
+    H8b is NOT included here — it is conditional on agent decisions that
+    do not exist yet at this point in the pipeline (H8a's
+    h1_category_purchase_behavior, h1_category_risk_factors, and
+    h8a_pair2_purchase_risk must all have been run through the agent
+    first). See check_and_generate_h8b.py, run after the agent has
+    processed all 44 conditions here.
     """
     print(f"\n{'='*60}")
     print("STEP 3: Dither Conditions")
     print(f"{'='*60}")
 
-    all_configs = (
-        build_h1_conditions()
-        + build_h2_conditions()
-        + build_h3_conditions()
-        + build_h4_conditions()
-    )
+    all_configs = build_all_conditions()
+
+    print("Verifying condition_id uniqueness across all conditions...")
+    validate_condition_ids_unique(all_configs)
+    print(f"  PASSED — {len(all_configs)} unique condition_ids, no collisions")
 
     if only_condition:
         all_configs = [c for c in all_configs if c.condition_id == only_condition]
         if not all_configs:
             raise ValueError(f"Unknown condition_id: {only_condition}")
 
-    print(f"Generating {len(all_configs)} condition(s)...\n")
+    print(f"\nGenerating {len(all_configs)} condition(s)...\n")
 
     for config in all_configs:
         print(f"  [{config.condition_id}]")
