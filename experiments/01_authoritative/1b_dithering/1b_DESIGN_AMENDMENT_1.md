@@ -290,15 +290,16 @@ statistical trap worth naming precisely: pseudo-replication. Each field's drift 
 a true sample size equal to the number of fields tested, not the number of customers. Customers dithered under the same 
 field are not independent replicates of "what happens when a top-5 field gets dithered"; pooling them would artificially inflate apparent power.
 **Two complementary analyses, not one:**
-1. **Group-level check (secondary):** Mann-Whitney U comparing the 7 top-5-plus-comparison field drift rates as one group against however 
-many comparison fields exist (currently 4, drawn from H2's and H3's individual conditions: `total_spend`, `tenure_months`, `avg_resolution_time_hours`, `refund_rate`). 
-Reported honestly as low powered given n=7 vs n=4 fields, a clean separation is still interpretable, 
-but a null result here does not mean "no effect," only "not enough fields tested to detect one at this sample size."
 
+1. **Group-level check (secondary):** Mann-Whitney U comparing the 5 self reported top 5 field drift rates against the 6 comparison 
+field drift rates (`email`, `is_vip`, added specifically as predicted null comparison fields, plus `total_spend`, `tenure_months`, 
+`avg_resolution_time_hours`, `refund_rate`, reused from H2/H3's individual conditions). Reported honestly as low powered given 
+n=5 vs n=6 fields. A clean separation is still interpretable, but a null result here does not mean "no effect," only 
+"not enough fields tested to detect one at this sample size."
 2. Per-field check (primary): Each individual field's drift rate (n≈1,000, well-powered) tested via pairwise McNemar's exact test against 
 each comparison field, not a standard two-proportion test, since every field level condition dithers the same 1,000-customer population, 
 and a naive two proportion test would wrongly treat those customers as independent samples across conditions (see "A Note on Statistical 
-Methodology" above). With 7 top-5, comparison added fields and 4 pure comparison fields, this produces 28 pairwise tests; the headline 
+Methodology" above). With 5 self-reported top-5 fields and 6 comparison fields, this produces 30 pairwise tests. The headline 
 finding is whether the top 5 fields' apparent advantage holds consistently across those pairwise comparisons, not whether any single 
 comparison clears significance in isolation. This is the same "consistency across many checks, not one p-value" framing already used for H6's tier ordering.
 
