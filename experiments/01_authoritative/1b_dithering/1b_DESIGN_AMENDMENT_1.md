@@ -75,6 +75,67 @@ This was resolved as three separate decisions rather than one bundled fix,
 since the three unsupported items turned out to be three structurally
 different problems wearing the same symptom.
 
+---
+
+## A Note on Statistical Methodology
+
+`evaluate_core.py` uses seven statistical tools across the evaluator. Each
+was chosen only after checking whether the more obvious, textbook first
+tool actually fits 1b's specific data structure ,several times, it
+doesn't. Collected here in one place so the reasoning behind every
+methodological choice is visible without hunting through individual
+function docstrings.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| How uncertain is a customer's true decision rate from a small run count? | Wald interval (p̂ ± z·√(p̂(1-p̂)/n)) | Collapses to zero width at p̂=0 or p̂=1, a perfectly consistent 5/5 customer would read as 100% certain, which is absurd from only 5 draws | **Wilson score interval**: derived by inverting a hypothesis test rather than centering on p̂'s own (unreliable at small n) variance. Verified against hand calculated values for every n=5 partition shape. |
+| Is one new confidence observation unusual vs. a customer's baseline? | Standard one sample t-test (tests whether a *sample mean* differs from a hypothesized value) | Answers a different question than ours, we have one new point, not a competing sample, so the standard SEM-based denominator understates the real uncertainty | **Prediction-interval-style t-statistic**: (`s·√(1+1/n)` in the denominator, not `s/√n`). Verified: the standard formula gives t=15.9 on our test data (absurdly inflated); the correct formula gives t=-6.5 (properly calibrated) on identical input. |
+| Does dithered reasoning look less coherent than a customer's own baseline wobble? | Two sample t-test, or Mann-Whitney with the normal approximation | Jaccard scores are bounded [0,1] and often skewed; the normal approximation is unreliable at our sample sizes (as few as 5 dithered scores vs. 10 baseline-pair scores) | **Exact Mann-Whitney U** (`method='exact'`). Verified against both a "looks like normal wobble" scenario (correctly non-significant, p=0.44) and a genuinely degraded scenario (correctly sharp, p=0.0007). |
+| Does drift rate differ between two stability tiers within one condition? | Chi-square test | Unreliable with small cell counts, which `tied_no_majority` and `deeply_boundary` frequently produce | **Fisher's exact test** — exact even at small cells, per-condition only (H6's actual claim rests on the median ratio holding across all conditions, not any single p-value). |
+| Does field X cause more drift than field Y? | Standard two-proportion z-test, treating each field's customers as independent samples | Every condition dithers the *same* 1,000-customer population — a customer's drift-under-X and drift-under-Y both depend on the same underlying profile, violating the independence assumption | **McNemar's exact test** (paired binary outcomes, discordant pairs only). Verified against both a balanced-discordance null scenario (p=0.49) and a genuinely asymmetric one (p<0.000001). |
+| How similar is dithered reasoning to baseline reasoning? | Frequency-weighted term comparison (TF-IDF-adjacent) | The specific weighting scheme considered (favor higher-frequency words) is backwards from standard practice — common words like "the," "customer," "priority" would get amplified, not the substantive differences that matter | **Unweighted Jaccard, stop-word filtered.** Deliberately simple and deterministic — the same reasoning 1a used to choose Jaccard over an LLM judge in the first place: no discretionary parameters, fully auditable, reproducible by anyone reading the code. |
+
+**The pattern across all six:** in every case, the naive tool isn't wrong in general — it's wrong for *this specific data's shape* (small samples, paired observations, skewed bounded distributions, or genuine independence violations). Every substitution was verified against known-correct reference values before being trusted by any hypothesis-specific evaluator file, not assumed correct from memory.
+
+**A seventh tool, added after the six above were already documented, worth a note on how it surfaced:** A condition level Jaccard coherence comparison (was `jaccard_dispersion_test`, pooling every customer's scores into two Mann-Whitney groups) shared the exact same paired data flaw the McNemar's vs. two proportion table above already identifies for drift rate. Namely, every condition dithers the *same* 1,000-customer population, and the same baseline texts feed both sides of the comparison for a given customer, violating Mann-Whitney's independence assumption at the population level.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| Does a dithering condition degrade reasoning coherence across the whole customer population? | Mann-Whitney U on pooled per customer scores (same tool as the per customer diagnostic, just aggregated across customers) | The same baseline texts feed both a customer's dithered vs baseline scores and their own self similarity scores. Pooling across the population treats correlated data as independent, the identical mistake McNemar's was built to avoid for drift rate | **Wilcoxon signed-rank test** on each customer's own paired difference (dithered coherence minus baseline coherence), reduced to one number per customer before testing. The per customer Mann-Whitney diagnostic (`jaccard_dispersion_test`) remains valid *within* a single customer's own two small score sets. It was never wrong, only wrong to pool across customers. |
+
+**The generalized principle, stated plainly:** Any comparison across two conditions applied to the *same* 1,000 customer population is a paired comparison, not an independent samples comparison. Binary outcomes need McNemar's, continuous outcomes need Wilcoxon signed-rank. This applies beyond Jaccard: any future comparison across magnitude levels or dither types for the same field (H2, H4) needs the same treatment, not a naive two-sample test.
+
+## Forward-Looking Note: Paired Comparisons Beyond H1/H3
+
+The generalized principle above (same-population comparisons need paired
+tests, not independent samples tests) applies to at least four places not
+yet built:
+
+- **H2's magnitude ladder**: drift rate at 15% vs. 40% for the same
+  field is the same 1,000 customers under two treatments. McNemar's, not
+  a two proportion test.
+- **H3's core comparison**: correlated vs. uncorrelated arms, same
+  population. McNemar's again.
+- **H4's dither-type comparison**: drift vs. entry_error for the same
+  field, same population. McNemar's.
+- **H7's breadth ladder**: genuinely different from the other three:
+  four paired conditions (1 field, 3, 6, all), not two. McNemar's only
+  handles pairwise comparisons. The correct generalization to more than
+  two paired conditions is **Cochran's Q test**.
+
+**Deliberately unresolved for now, to be decided when `evaluate_h7.py` is
+actually built, not guessed at in advance:** if Cochran's Q returns a
+significant result (drift rate genuinely differs somewhere across the
+breadth ladder), what's the follow up? Candidates include pairwise
+McNemar's across all six condition pairs with a multiple comparisons
+correction (Bonferroni, Holm, or similar), or a different post-hoc
+approach entirely. This is intentionally left open rather than committed
+to now. Building the correction logic before we've seen real H7 data
+risks the same premature commitment mismatch H8b's field selection was
+specifically designed to avoid by deferring to real data instead of a
+pre-registered guess.
+
+
 ### Boolean support: built
 
 `is_vip`, `has_active_subscription`, and `has_pending_order` now dither via
@@ -136,9 +197,20 @@ mechanism, only a new **analysis lens**.
 
 ### New cross-cutting analysis: segment/profile mismatch
 
-For any condition that dithers numeric fields, the evaluator will check whether a customer's dithered profile still falls within their original `customer_segment`'s typical range and flag customers whose profile has effectively "left" their assigned segment's normal territory. **Computed empirically from the 1,000-customer ground truth dataset itself** (e.g. 5th–95th percentile per field per segment, grouped directly from `canonical_customers.json`), not by extracting the generator's internal literal bounds, which would require a refactor and would create a second, driftable source of truth. This is a free enrichment across H1, H2, H4, and H7, anywhere a numeric field gets dithered, not a new hypothesis or new engine mechanism.
+For any condition that dithers numeric fields, the evaluator will check whether a 
+customer's dithered profile still falls within their original `customer_segment`'s 
+typical range and flag customers whose profile has effectively "left" their assigned 
+segment's normal territory. **Computed empirically from the 1,000-customer ground 
+truth dataset itself** (e.g. 5th–95th percentile per field per segment, grouped 
+directly from `canonical_customers.json`), not by extracting the generator's internal 
+literal bounds, which would require a refactor and would create a second, driftable 
+source of truth. This is a free enrichment across H1, H2, H4, and H7, anywhere a 
+numeric field gets dithered, not a new hypothesis or new engine mechanism.
 
-**The same concept extends to boolean fields.** `is_vip=True` while `customer_segment != high_value` after dithering is a categorical instance of the identical phenomenon. Specifically, a dithered attribute no longer matching what the customer's protected, undithered segment assignment would predict. Folded into this same lens rather than treated as a separate concept.
+**The same concept extends to boolean fields.** `is_vip=True` while `customer_segment != high_value` 
+after dithering is a categorical instance of the identical phenomenon. Specifically, a dithered 
+attribute no longer matching what the customer's protected, undithered segment assignment would 
+predict. Folded into this same lens rather than treated as a separate concept.
 
 ### `preferred_categories`: a distinct, smaller deferral
 
@@ -153,6 +225,12 @@ judged a genuinely separate design problem from H9's boolean/categorical
 magnitude question (which this amendment now resolves for booleans and
 single-select categoricals) and is deferred on its own, not folded into H9's
 scope. See Deferred Items below.
+
+A note on condition numbering: Earlier versions of this document numbered conditions 
+sequentially across the whole experiment (1–48). This is dropped as of this revision. Every 
+time a hypothesis's condition count changed, it required renumbering everything downstream, 
+which happened often enough to become its own source of error risk. Conditions are now 
+referenced by condition_id alone, matching how they're actually identified in code.
 
 ---
 
@@ -178,51 +256,57 @@ beyond "not in the top 5."
 - **Question D:** Does identity data, assumed decision-irrelevant, actually
   behave as inert as assumed?
 
-### Restructured condition set (12 conditions)
+### Restructured condition set
 
-**Five individual field conditions** (unchanged) — each 1a H4 top-5 field
-dithered alone at 15% magnitude:
+Five individual field conditions, each 1a H4 top-5 field dithered alone at 15% magnitude:
+`h1_individual_last_purchase_days_ago`, `h1_individual_churn_risk_score`, `h1_individual_nps_score`, 
+`h1_individual_lifetime_value_estimate`, `h1_individual_support_tickets_open`.
 
-1. `h1_individual_last_purchase_days_ago`
-2. `h1_individual_churn_risk_score`
-3. `h1_individual_nps_score`
-4. `h1_individual_lifetime_value_estimate`
-5. `h1_individual_support_tickets_open`
+Two comparison group individual field conditions (added): filling the only two categories with zero 
+individually-tested fields anywhere in the 44-condition set, at matched 15% magnitude: `h1_individual_email` 
+(Identity, predicted near-zero drift, a genuine test of the null hypothesis, analogous to H8a's negative control 
+framing) and `h1_individual_is_vip` (Account Status: also isolates whether `h1_category_account_status` bundled 
+drift is driven by `is_vip` specifically or spread across its three fields, using the per-field 
+attribution machinery already built in evaluate_core.py).
 
-**Six category-level conditions** — every field in one prompt section
-dithered together, matched 15% magnitude, uncorrelated. **Field lists below
-reflect engine-verified corrections** (see "A Note on Protected Fields and
-Boolean Support" above for the full reasoning behind each exclusion)
+Six category-level conditions: every field in one prompt section dithered together at matched 15% magnitude, 
+uncorrelated. Field lists reflect engine-verified corrections. See "A Note on Protected Fields and Boolean Support" 
+above for the full reasoning behind each exclusion:
 
-6. `h1_category_identity` — name, email, phone, address. **`dob` excluded**
-   as it is not currently dither-capable in the engine (no defined percentage-
-   magnitude or plausibility-tier behavior for a date-of-birth field).
-   This is an unflagged gap, not a protected field, worth a future engine extension
-   if birth-date sensitivity becomes independently interesting.
-7. `h1_category_purchase_behavior` — total_purchases, total_spend,
-   avg_order_value, purchase_frequency_days, last_purchase_days_ago,
-   lifetime_value_estimate
-8. `h1_category_engagement` — nps_score, email_open_rate,
-   last_login_days_ago, support_tickets_open, support_tickets_closed,
-   avg_resolution_time_hours
-9. `h1_category_risk_factors` — churn_risk_score, payment_failures,
-   fraud_risk_score, refund_rate
-10. `h1_category_segmentation` — acquisition_channel, tenure_months.
-    **`customer_segment` excluded**. (protected, upstream field. see
-    above). **`preferred_categories` excluded** (list-valued field,
-    deferred separately see above).
-11. `h1_category_account_status` — is_vip, has_active_subscription,
-    has_pending_order. **`is_at_risk` and `recently_contacted_support`
-    excluded** (protected, derived fields, see above). This category
-    condition is now correctly scoped to the three fields that are
-    genuinely independent account-status attributes rather than
-    downstream consequences of fields living in other categories.
+`h1_category_identity` — name, email, phone, address (dob excluded, not currently dither capable)
+`h1_category_purchase_behavior` — total_purchases, total_spend, avg_order_value, purchase_frequency_days, last_purchase_days_ago, lifetime_value_estimate
+`h1_category_engagement` — nps_score, email_open_rate, last_login_days_ago, support_tickets_open, support_tickets_closed, avg_resolution_time_hours
+`h1_category_risk_factors` — churn_risk_score, payment_failures, fraud_risk_score, refund_rate
+`h1_category_segmentation` — acquisition_channel, tenure_months (customer_segment excluded. Protected, upstream field; preferred_categories excluded, list-valued, deferred separately)
+`h1_category_account_status` — is_vip, has_active_subscription, has_pending_order (is_at_risk and recently_contacted_support excluded and protected, derived fields)
 
-**One distributed condition**: one field per category, deliberately
-excluding the H4 top-5, matched 15% magnitude, uncorrelated:
+One distributed condition: one field per category, deliberately excluding the H4 top-5, matched 15% magnitude, 
+uncorrelated: h1_distributed: email, avg_order_value, last_login_days_ago, refund_rate, acquisition_channel, has_pending_order.
 
-12. `h1_distributed` — email, avg_order_value, last_login_days_ago,
-    refund_rate, acquisition_channel, has_pending_order
+### Question A methodology — group-level test and its limitation
+Testing "do the H4 top 5 fields produce more drift than fields the agent didn't self-report as important" runs into a real 
+statistical trap worth naming precisely: pseudo-replication. Each field's drift rate is well-powered on its own 
+(~1,000 customers per field), but the group level question, top-5 fields as a group vs. comparison fields as a group, has 
+a true sample size equal to the number of fields tested, not the number of customers. Customers dithered under the same 
+field are not independent replicates of "what happens when a top-5 field gets dithered"; pooling them would artificially inflate apparent power.
+**Two complementary analyses, not one:**
+1. **Group-level check (secondary):** Mann-Whitney U comparing the 7 top-5-plus-comparison field drift rates as one group against however 
+many comparison fields exist (currently 4, drawn from H2's and H3's individual conditions: `total_spend`, `tenure_months`, `avg_resolution_time_hours`, `refund_rate`). 
+Reported honestly as low powered given n=7 vs n=4 fields, a clean separation is still interpretable, 
+but a null result here does not mean "no effect," only "not enough fields tested to detect one at this sample size."
+
+2. Per-field check (primary): Each individual field's drift rate (n≈1,000, well-powered) tested via pairwise McNemar's exact test against 
+each comparison field, not a standard two-proportion test, since every field level condition dithers the same 1,000-customer population, 
+and a naive two proportion test would wrongly treat those customers as independent samples across conditions (see "A Note on Statistical 
+Methodology" above). With 7 top-5, comparison added fields and 4 pure comparison fields, this produces 28 pairwise tests; the headline 
+finding is whether the top 5 fields' apparent advantage holds consistently across those pairwise comparisons, not whether any single 
+comparison clears significance in isolation. This is the same "consistency across many checks, not one p-value" framing already used for H6's tier ordering.
+
+**Comparison group note:** Drawing `total_spend`, `tenure_months`, `avg_resolution_time_hours`, and `refund_rate` from H2 and H3's 
+individual conditions is intentional cross-hypothesis data reuse, consistent with the pattern already established 
+for H2/H4's field-reuse and H3's free 2x2 directionality. `evaluate_h1.py` reaches into H2 and H3's condition folders 
+for this one analysis rather than duplicating data generation.
+
 
 **Scope note:** `h1_distributed` is investigatory, not exhaustive. A null or
 positive result scopes deeper combinatorial work into Phase 2 rather than
@@ -834,23 +918,27 @@ from the main pipeline, but does not belong in the core hypothesis set.
 
 | Hypothesis | Original | Amended |
 |---|---|---|
-| H1 | 7 | 12 |
+| H1 | 7 | 14 |
 | H2 | 4 | 12 |
 | H3 | 8 | 11 |
-| H4 | 2 | 6 |
+| H4 | 2 | 3 |
 | H7 (new) | — | 4 |
 | H8a (new) | — | 2 |
 | H8b (new) | — | 0–1 (conditional) |
-| **Total** | **21** | **47–48** |
+| **Total** | **21** | **46–47** |
 
-At n=1,000 customers per condition: 47,000–48,000 dither-condition agent
-calls, plus the 5,000-call primary baseline, plus a diagnostic expansion for
-`deeply_boundary` customers only (minimum 25 runs; exact added cost
-confirmed once real population size is known, estimated at 1,000–2,000
-additional calls). Total: roughly **53,000–55,000 agent calls**.
+At n=1,000 customers per condition: 46,000–47,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
 
-At 1a's observed per-record cost (~$0.00232/record): approximately
-**$123–128 at standard API pricing, $62–64 with Batch API's 50% discount.**
+Boundary expansion cost is a genuine open unknown, not a placeholder estimate. The mechanism now covers three tiers 
+(`deeply_boundary`, `lightly_boundary`, `tied_no_majority`, per the `aggregate_baseline.py` tied vote fix) with an adaptive 
+Wilson interval convergence loop (batches of 10, ±15pp precision threshold, hard cap at 60 total runs per customer), 
+not the earlier flat "minimum 25 runs" estimate this section previously cited. Exact added cost depends on how large the 
+combined boundary population turns out to be once the primary baseline actually runs. See `RESEARCH_NOTES.md`'s open 
+question tracking this same population split as a stochasticity finding in its own right.
+
+Total: roughly **51,000–52,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
+
+At 1a's observed per-record cost (~$0.00232/record): approximately **$118–121 at standard API pricing before boundary expansion, $59–61 with Batch API's 50% discount**.
 
 ---
 
@@ -936,6 +1024,14 @@ At 1a's observed per-record cost (~$0.00232/record): approximately
   and the undefined "business outcomes" objective, both inherited from 1a,
   are flagged as inert until now and first meaningfully exercised by H3's
   uncorrelated arm. Left unpatched to avoid introducing new confounds.
-- Total condition count increased from 21 to 47–48; cost re-estimate
+- Total condition count increased from 21 to 46–47; cost re-estimate
   (~$62–64 at Batch pricing) flagged as needed before full pipeline
   execution.
+- **H1** expanded from 12 to 14 conditions: two individual field conditions 
+added (`email`, `is_vip`) to close the only two categories with zero 
+individually tested fields. Question A's group level test explicitly flagged 
+as low powered (pseudo-replication: true n is number of fields, not number of customers). 
+A per-field two proportion test against the comparison group's average adopted 
+as the primary analysis instead. Global sequential condition numbering dropped 
+throughout the document in favor of `condition_id alone`, removing a recurring 
+source of renumbering errors.

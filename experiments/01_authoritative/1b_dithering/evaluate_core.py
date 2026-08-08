@@ -643,6 +643,9 @@ def jaccard_dispersion_test(
     baseline_self_similarity_scores: List[float],
 ) -> Dict[str, Any]:
     """
+    PER-CUSTOMER diagnostic only — see jaccard_condition_level_shift()
+    for the correct CONDITION-level (whole-population) headline metric.
+
     Does a dithered condition's reasoning look like ordinary baseline
     wobble, or is it genuinely less coherent than the customer's own
     reasoning ever is with itself? Two-sample comparison via EXACT
@@ -653,16 +656,27 @@ def jaccard_dispersion_test(
     a genuinely degraded scenario as sharply significant (p=0.0007,
     U=0 — every dithered score below every baseline score).
 
+    SCOPE WARNING: valid only WITHIN a single customer's own two small
+    score sets. Do NOT pool scores across multiple customers and feed
+    them here — the same baseline texts feed both a customer's dithered-
+    vs-baseline scores AND their own self-similarity scores, so pooling
+    across the population would compare correlated data as if it were
+    independent, exactly the mistake McNemar's test was built to avoid
+    for drift rates. For a condition-level (whole-population) finding,
+    use jaccard_condition_level_shift() instead, which correctly reduces
+    each customer to one paired difference before testing.
+
     Chosen over a t-test because Jaccard scores are bounded [0,1], often
     skewed, and we're comparing two whole SETS of scores rather than one
     new point against a reference distribution — genuinely different
     data shape than the confidence comparison above.
 
     dithered_vs_baseline_scores: Jaccard(dithered_reasoning, each
-        matching baseline reasoning text) — one score per baseline text
-    baseline_self_similarity_scores: Jaccard between every PAIR of
-        baseline reasoning texts (C(n,2) scores) — the customer's own
-        natural reasoning variability, with no dithering involved
+        matching baseline reasoning text) — one score per baseline text,
+        for ONE customer
+    baseline_self_similarity_scores: Jaccard between every PAIR of THAT
+        SAME customer's baseline reasoning texts (C(n,2) scores) — their
+        own natural reasoning variability, with no dithering involved
     """
     if len(dithered_vs_baseline_scores) < 1 or len(baseline_self_similarity_scores) < 1:
         return {"u_statistic": None, "p_value": None,
@@ -710,3 +724,169 @@ def fishers_exact_tier_check(
         "tier_a_rate": drift_count_tier_a / total_tier_a if total_tier_a else None,
         "tier_b_rate": drift_count_tier_b / total_tier_b if total_tier_b else None,
     }
+
+
+def mcnemar_paired_test(
+    drifted_under_x: List[bool],
+    drifted_under_y: List[bool],
+) -> Dict[str, Any]:
+    """
+    Are two fields' drift rates genuinely different, accounting for the
+    fact that every condition in 1b dithers the SAME underlying 1,000-
+    customer population? Comparing field X's drift rate to field Y's
+    drift rate via a standard two-proportion test would treat them as
+    independent samples — but they're not. Customer C's drift-under-X
+    and drift-under-Y both depend on the same customer's baseline
+    profile (a customer already near a decision boundary is more likely
+    to drift under EITHER field's dithering than a rock-solid stable
+    customer is). That shared dependency makes this a PAIRED comparison,
+    the same structural category as a before/after medical trial — just
+    with "before" and "after" replaced by "under field X" and "under
+    field Y" for the same customer, with no risk of order effects since
+    the agent has no memory between calls and both conditions are
+    independently generated from the same clean baseline.
+
+    McNemar's test is the correct tool for paired binary outcomes. It
+    only draws information from DISCORDANT pairs — customers who
+    drifted under exactly one of the two fields, not both or neither.
+    This has a nice side effect: customers who are simply prone to
+    drifting regardless of which field gets touched (general fragility)
+    are naturally excluded from the field-specific comparison, echoing
+    the same general-fragility-vs-field-specific-sensitivity distinction
+    H6 was built to draw, just surfacing for free at the pairwise level.
+
+    Uses the EXACT binomial formulation (not the chi-square
+    approximation), consistent with using exact methods rather than
+    normal approximations wherever sample sizes might be small — same
+    principle as choosing Wilson over Wald and exact Mann-Whitney over
+    its normal approximation elsewhere in this module.
+
+    drifted_under_x, drifted_under_y: aligned lists (same customer, same
+        order) of whether each customer drifted under condition X and
+        condition Y respectively. Must be pre-filtered to customers
+        present in BOTH conditions before calling this.
+    """
+    if len(drifted_under_x) != len(drifted_under_y):
+        raise ValueError(
+            f"Mismatched lengths ({len(drifted_under_x)} vs "
+            f"{len(drifted_under_y)}) — inputs must be aligned per customer."
+        )
+
+    b = sum(1 for x, y in zip(drifted_under_x, drifted_under_y) if x and not y)
+    c = sum(1 for x, y in zip(drifted_under_x, drifted_under_y) if not x and y)
+    n_discordant = b + c
+
+    if n_discordant == 0:
+        return {
+            "b_x_only": b, "c_y_only": c, "n_discordant": 0,
+            "p_value": 1.0,
+            "note": "No discordant pairs — fields agree on every customer "
+                    "in this sample, nothing to distinguish them on.",
+        }
+
+    result = stats.binomtest(b, n_discordant, p=0.5, alternative='two-sided')
+
+    return {
+        "b_x_only":     b,   # drifted under X but not Y
+        "c_y_only":     c,   # drifted under Y but not X
+        "n_discordant": n_discordant,
+        "n_pairs":      len(drifted_under_x),
+        "p_value":      float(result.pvalue),
+    }
+
+
+def wilcoxon_signed_rank_test(paired_differences: List[float]) -> Dict[str, Any]:
+    """
+    Does a condition-level continuous metric show a genuine shift across
+    the SAME customer population, when raw values can't be pooled into
+    two independent groups?
+
+    This matters everywhere in 1b, not just one place: every condition
+    dithers the same 1,000-customer baseline population. Comparing two
+    conditions' raw per-customer scores as if they were independent
+    samples (the naive Mann-Whitney approach) breaks down whenever the
+    same customer contributes correlated information to both sides — the
+    same underlying baseline texts feed BOTH a customer's dithered-vs-
+    baseline Jaccard scores AND their own baseline-self-similarity
+    scores, so a verbose customer's writing style shows up in both
+    measurements, not as two independent observations.
+
+    The fix: reduce each customer to ONE paired difference (their
+    condition-A summary value minus their condition-B summary value, or
+    dithered-coherence minus baseline-coherence for the Jaccard case),
+    then test whether the MEDIAN of those paired differences departs
+    from zero across the population. This is the direct continuous-
+    variable analog to McNemar's test for paired binary outcomes —
+    same underlying principle (respect the pairing, don't pretend
+    independence), different data type.
+
+    Used for: condition-level Jaccard coherence shift (H3, H5), and any
+    future continuous paired comparison across magnitude levels or dither
+    types for the same field (H2, H4) where the same customers are being
+    compared under two treatments rather than two independent samples.
+
+    Exact zero differences are dropped before ranking (scipy's default
+    behavior, `zero_method='wilcox'`) — a customer whose scores were
+    identical under both conditions contributes no directional
+    information either way.
+    """
+    if len(paired_differences) < 1:
+        return {"statistic": None, "p_value": None,
+                "note": "No paired differences to test"}
+
+    nonzero = [d for d in paired_differences if d != 0]
+    if len(nonzero) < 1:
+        return {"statistic": None, "p_value": 1.0, "n_pairs": len(paired_differences),
+                "n_nonzero": 0,
+                "note": "Every paired difference was exactly zero — no "
+                        "directional signal either way"}
+
+    result = stats.wilcoxon(nonzero, alternative='two-sided')
+
+    return {
+        "statistic":     float(result.statistic),
+        "p_value":       float(result.pvalue),
+        "n_pairs":       len(paired_differences),
+        "n_nonzero":     len(nonzero),
+        "median_diff":   float(np.median(paired_differences)),
+    }
+
+
+def jaccard_condition_level_shift(
+    per_customer_dithered_coherence: List[float],
+    per_customer_baseline_coherence: List[float],
+) -> Dict[str, Any]:
+    """
+    Condition-level headline metric: does this dithering condition, in
+    general, degrade reasoning coherence across the customer population?
+
+    per_customer_dithered_coherence: one value per customer — their mean
+        Jaccard(dithered_reasoning, matching baseline texts) — see
+        mean_pairwise_jaccard().
+    per_customer_baseline_coherence: one value per customer, SAME ORDER —
+        their mean baseline self-similarity (mean pairwise Jaccard among
+        their own matching baseline texts).
+
+    Wraps wilcoxon_signed_rank_test() on the per-customer paired
+    differences (dithered - baseline) rather than pooling raw scores —
+    see that function's docstring for why pooling would violate
+    independence. This REPLACES a naive condition-level Mann-Whitney,
+    which would have incorrectly treated correlated per-customer scores
+    as independent samples.
+    """
+    if len(per_customer_dithered_coherence) != len(per_customer_baseline_coherence):
+        raise ValueError(
+            f"Mismatched lengths ({len(per_customer_dithered_coherence)} vs "
+            f"{len(per_customer_baseline_coherence)}) — inputs must be "
+            f"aligned per customer, same order."
+        )
+
+    diffs = [
+        d - b for d, b in zip(per_customer_dithered_coherence, per_customer_baseline_coherence)
+    ]
+    result = wilcoxon_signed_rank_test(diffs)
+    result["interpretation"] = (
+        "negative median_diff means dithered reasoning is LESS coherent "
+        "than the customer's own baseline wobble, on average"
+    )
+    return result
