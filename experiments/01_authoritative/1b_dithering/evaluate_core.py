@@ -638,6 +638,51 @@ def prediction_interval_t_test(
     }
 
 
+def mann_whitney_test(
+    group_a: List[float],
+    group_b: List[float],
+    label_a: str = "group_a",
+    label_b: str = "group_b",
+) -> Dict[str, Any]:
+    """
+    Generic exact Mann-Whitney U test for two independent samples — NOT
+    the normal approximation, which breaks down at small sample sizes
+    (verified against both a null and a clearly-separated scenario,
+    2026-08, originally in the context of Jaccard dispersion — see
+    jaccard_dispersion_test() below, now a thin wrapper around this).
+
+    Valid ONLY when the two groups are genuinely independent samples.
+    Do NOT use this to compare data drawn from the SAME underlying
+    population under two conditions (e.g. the same customers' scores
+    under two different dithering conditions) — that's a paired
+    comparison and needs wilcoxon_signed_rank_test() instead. See "A
+    Note on Statistical Methodology" for the full reasoning on when
+    each applies.
+
+    Used for: H1's Question A group-level check (5 self-reported top-5
+    field drift rates vs. 6 comparison field drift rates — genuinely
+    independent since each is a summary statistic from a DIFFERENT
+    field's condition, not the same customers measured twice), and
+    jaccard_dispersion_test()'s per-customer diagnostic.
+    """
+    if len(group_a) < 1 or len(group_b) < 1:
+        return {"u_statistic": None, "p_value": None,
+                "note": "Insufficient data for Mann-Whitney test"}
+
+    u_stat, p_value = stats.mannwhitneyu(
+        group_a, group_b, method='exact', alternative='two-sided',
+    )
+
+    return {
+        "u_statistic":            float(u_stat),
+        "p_value":                float(p_value),
+        f"n_{label_a}":            len(group_a),
+        f"n_{label_b}":            len(group_b),
+        f"{label_a}_mean":         float(np.mean(group_a)),
+        f"{label_b}_mean":         float(np.mean(group_b)),
+    }
+
+
 def jaccard_dispersion_test(
     dithered_vs_baseline_scores: List[float],
     baseline_self_similarity_scores: List[float],
@@ -656,6 +701,11 @@ def jaccard_dispersion_test(
     a genuinely degraded scenario as sharply significant (p=0.0007,
     U=0 — every dithered score below every baseline score).
 
+    Thin wrapper around mann_whitney_test() — kept as its own named
+    function (rather than calling mann_whitney_test() directly at every
+    call site) specifically for its scope warning below, and to keep
+    the historical verified-numbers reference attached to a stable name.
+
     SCOPE WARNING: valid only WITHIN a single customer's own two small
     score sets. Do NOT pool scores across multiple customers and feed
     them here — the same baseline texts feed both a customer's dithered-
@@ -666,11 +716,6 @@ def jaccard_dispersion_test(
     use jaccard_condition_level_shift() instead, which correctly reduces
     each customer to one paired difference before testing.
 
-    Chosen over a t-test because Jaccard scores are bounded [0,1], often
-    skewed, and we're comparing two whole SETS of scores rather than one
-    new point against a reference distribution — genuinely different
-    data shape than the confidence comparison above.
-
     dithered_vs_baseline_scores: Jaccard(dithered_reasoning, each
         matching baseline reasoning text) — one score per baseline text,
         for ONE customer
@@ -678,23 +723,14 @@ def jaccard_dispersion_test(
         SAME customer's baseline reasoning texts (C(n,2) scores) — their
         own natural reasoning variability, with no dithering involved
     """
-    if len(dithered_vs_baseline_scores) < 1 or len(baseline_self_similarity_scores) < 1:
+    result = mann_whitney_test(
+        dithered_vs_baseline_scores, baseline_self_similarity_scores,
+        label_a="dithered", label_b="baseline_self",
+    )
+    if result["u_statistic"] is None:
         return {"u_statistic": None, "p_value": None,
                 "note": "Insufficient data for dispersion test"}
-
-    u_stat, p_value = stats.mannwhitneyu(
-        dithered_vs_baseline_scores, baseline_self_similarity_scores,
-        method='exact', alternative='two-sided',
-    )
-
-    return {
-        "u_statistic": float(u_stat),
-        "p_value": float(p_value),
-        "n_dithered": len(dithered_vs_baseline_scores),
-        "n_baseline_self": len(baseline_self_similarity_scores),
-        "dithered_mean": float(np.mean(dithered_vs_baseline_scores)),
-        "baseline_self_mean": float(np.mean(baseline_self_similarity_scores)),
-    }
+    return result
 
 
 def fishers_exact_tier_check(
