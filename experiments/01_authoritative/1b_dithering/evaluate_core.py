@@ -5,7 +5,7 @@ Evaluate Core — Experiment 1b: Dithering
 The Agentic Data Contract · Pillar 1: Authoritative
 
 Shared primitives used by every evaluate_h*.py hypothesis file. "Bard
-Hall in one file" — every statistical tool used anywhere in 1b's
+Hall in one file". Every statistical tool used anywhere in 1b's
 evaluation lives here, implemented and verified once, rather than
 re-derived per hypothesis file where a subtle divergence could hide.
 
@@ -926,3 +926,223 @@ def jaccard_condition_level_shift(
         "than the customer's own baseline wobble, on average"
     )
     return result
+
+
+def spearman_monotonicity_test(
+    ordered_x: List[float],
+    ordered_y: List[float],
+) -> Dict[str, Any]:
+    """
+    Does y trend monotonically with x? Used for H2's magnitude-vs-drift-
+    rate curves: does drift rate increase monotonically as dither
+    magnitude increases, within a single field?
+
+    This is a field-level test on already-aggregated summary statistics
+    (one drift rate per magnitude level, e.g. 4 points for the 5/15/40/
+    100% ladder), NOT a customer-level test — so it does not have the
+    same-population pairing problem McNemar's and Wilcoxon exist to fix
+    elsewhere in this module. Each point is one field's condition at one
+    magnitude, not the same customers measured twice at two magnitudes.
+    (Comparing two SPECIFIC magnitude levels' drift rates directly for
+    the same field, e.g. "is 40% significantly higher than 15%?", DOES
+    have that pairing problem and needs mcnemar_paired_test() instead —
+    this function only tests the overall trend shape across all levels.)
+
+    ordered_x: the ordinal/numeric sequence (e.g. magnitude levels in
+        order: [0.05, 0.15, 0.40, 1.00])
+    ordered_y: the corresponding values at each x (e.g. drift rates)
+
+    Returns rho close to +1 for a clean monotonic increase, close to -1
+    for a clean monotonic decrease, near 0 for no consistent trend.
+    """
+    if len(ordered_x) != len(ordered_y):
+        raise ValueError(
+            f"Mismatched lengths ({len(ordered_x)} vs {len(ordered_y)})"
+        )
+    if len(ordered_x) < 3:
+        return {"rho": None, "p_value": None,
+                "note": "Need at least 3 points to assess a trend"}
+
+    rho, p_value = stats.spearmanr(ordered_x, ordered_y)
+
+    return {
+        "rho":     float(rho),
+        "p_value": float(p_value),
+        "n_points": len(ordered_x),
+        "interpretation": (
+            "monotonic increase" if rho > 0.5 else
+            "monotonic decrease" if rho < -0.5 else
+            "no clear monotonic trend"
+        ),
+    }
+
+
+def cochrans_q_test(binary_matrix: List[List[bool]]) -> Dict[str, Any]:
+    """
+    Generalizes McNemar's test to MORE THAN TWO paired conditions applied
+    to the same population — needed anywhere a ladder of k>2 conditions
+    (not just two) is compared for the same customers. First identified
+    as needed for H7's breadth ladder (1 field, 3, 6, all — 4 paired
+    conditions); actually needed FIRST for H2's magnitude ladder (5%,
+    15%, 40%, 100% — also 4 paired conditions per field), which is why
+    it's built here rather than deferred. H7 reuses this same primitive
+    when built.
+
+    Uses the standard chi-square approximation, NOT an exact permutation
+    test — deliberately, and for a different reason than every other
+    "prefer exact" choice in this module. Wilson-over-Wald, exact
+    Mann-Whitney, and the exact binomial inside McNemar's were all
+    correcting for a SMALL number of RUNS OR OBSERVATIONS (5 baseline
+    runs, 5-vs-10 Jaccard scores). Cochran's Q's asymptotic validity
+    depends on the number of SUBJECTS (~1,000 customers here), which is
+    large — the chi-square approximation is well-behaved at that scale,
+    and no readily-available exact permutation version exists without
+    adding a new dependency (statsmodels) for a test whose approximation
+    is already sound for our actual sample size.
+
+    Verified against a proven mathematical identity rather than a
+    recalled reference number: when k=2, Cochran's Q must algebraically
+    reduce to McNemar's uncorrected chi-square statistic, (b-c)^2/(b+c).
+    Confirmed both by hand derivation and numerically, 2026-08.
+
+    binary_matrix: one row per customer, one column per condition (k
+    columns, all conditions applied to the SAME customers, same order).
+    Each cell is True/False (drifted or not) under that condition.
+
+    Usage pattern for a magnitude/breadth ladder: if this comes back
+    significant, follow up with adjacent-step McNemar's tests to
+    localize WHERE in the ladder the difference occurs. If not
+    significant, report the null finding directly — do not go fishing
+    in post-hoc adjacent tests the omnibus gate didn't earn (same
+    discipline as H8b's conditional generation rule).
+    """
+    arr = np.array(binary_matrix, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("binary_matrix must be 2D: rows=customers, columns=conditions")
+    n, k = arr.shape
+    if k < 2:
+        raise ValueError(f"Need at least 2 conditions, got {k}")
+
+    T = arr.sum(axis=0)  # column totals — total drifted count per condition
+    L = arr.sum(axis=1)  # row totals — total conditions each customer drifted under
+    N = arr.sum()
+
+    denominator = k * np.sum(L) - np.sum(L**2)
+    if denominator == 0:
+        return {
+            "Q_statistic": None, "df": k - 1, "p_value": None,
+            "note": "Degenerate case — every customer drifted under all "
+                    "conditions or none, no variation to test.",
+        }
+
+    numerator = (k - 1) * (k * np.sum(T**2) - N**2)
+    Q = numerator / denominator
+    df = k - 1
+    p_value = float(stats.chi2.sf(Q, df))
+
+    return {
+        "Q_statistic":    float(Q),
+        "df":             df,
+        "p_value":        p_value,
+        "n_subjects":     n,
+        "k_conditions":   k,
+        "column_totals":  T.tolist(),
+    }
+
+
+def align_drift_by_customer(
+    records_a: List[Dict[str, Any]],
+    records_b: List[Dict[str, Any]],
+) -> Tuple[List[bool], List[bool], int]:
+    """
+    Build aligned (same customer, same order) drift-boolean lists for
+    two conditions, intersecting on customer_id — the standard prep step
+    before any paired test (McNemar's, Wilcoxon, Cochran's Q) between
+    two or more conditions applied to the same population.
+
+    Originally built inside evaluate_h1.py for its 30 pairwise McNemar's
+    comparisons; moved here once evaluate_h2.py needed the identical
+    utility for its magnitude-ladder comparisons — same "one correct
+    implementation, reused everywhere" principle already applied to
+    mann_whitney_test().
+
+    Conditions should share the same 1,000-customer population in
+    practice (no H1/H2 condition uses segment_filter), but intersecting
+    defensively rather than assuming identical customer sets protects
+    against a silent misalignment if that ever changes.
+    """
+    by_customer_a = {r["customer_id"]: r["drifted"] for r in records_a}
+    by_customer_b = {r["customer_id"]: r["drifted"] for r in records_b}
+    shared_customers = sorted(set(by_customer_a) & set(by_customer_b))
+
+    drift_a = [by_customer_a[c] for c in shared_customers]
+    drift_b = [by_customer_b[c] for c in shared_customers]
+    return drift_a, drift_b, len(shared_customers)
+
+
+def align_drift_by_customer_multi(
+    condition_records_list: List[List[Dict[str, Any]]],
+) -> Tuple[List[List[bool]], List[str]]:
+    """
+    Generalizes align_drift_by_customer() to MORE THAN TWO conditions —
+    needed for Cochran's Q, which requires one binary_matrix row per
+    customer across all k conditions at once, not pairwise. Intersects
+    on customer_id across ALL conditions in the list (defensive, same
+    reasoning as the two-condition version).
+
+    Returns (binary_matrix, shared_customer_ids) where binary_matrix has
+    one row per shared customer, one column per condition IN THE SAME
+    ORDER as condition_records_list — the caller is responsible for
+    passing conditions in a meaningful order (e.g. ascending magnitude)
+    since Cochran's Q itself is order-agnostic, but any downstream
+    adjacent-step follow-up depends on the columns being correctly ordered.
+    """
+    per_condition_maps = [
+        {r["customer_id"]: r["drifted"] for r in records}
+        for records in condition_records_list
+    ]
+    shared_customers = sorted(set.intersection(*(set(m) for m in per_condition_maps)))
+
+    binary_matrix = [
+        [m[c] for m in per_condition_maps]
+        for c in shared_customers
+    ]
+    return binary_matrix, shared_customers
+
+
+def descriptive_trend_correlation(
+    x_values: List[float],
+    y_values: List[float],
+) -> Dict[str, Any]:
+    """
+    Spearman's rank correlation for a small ordered ladder (e.g. drift
+    rate across 4 magnitude levels) — DESCRIPTIVE, not confirmatory. At
+    n=4 points, this is not a significance test we lean statistical
+    weight against; it's a description of whether the observed curve
+    trends consistently in one direction, worth reporting as exploratory
+    signal ("this pattern is worth further investigation at larger
+    sample size") rather than a claim of established monotonicity.
+
+    The caveat is attached directly to the returned data, not left to
+    documentation alone — same pattern as h1_distributed's scope_note —
+    so nobody downstream can report the correlation without the caveat
+    traveling with it.
+    """
+    if len(x_values) < 3:
+        return {"rho": None, "p_value": None,
+                "note": "Need at least 3 points for a meaningful trend correlation"}
+
+    rho, p_value = stats.spearmanr(x_values, y_values)
+    return {
+        "rho":     float(rho),
+        "p_value": float(p_value),
+        "n_points": len(x_values),
+        "interpretation": (
+            "DESCRIPTIVE ONLY, not confirmatory. At this few points, rho "
+            "describes whether the curve trends consistently in one "
+            "direction in THIS sample — it does not establish "
+            "monotonicity or carry statistical weight on its own. A "
+            "rho close to +-1 is exploratory signal worth further "
+            "investigation at larger sample size, not a validated finding."
+        ),
+    }
