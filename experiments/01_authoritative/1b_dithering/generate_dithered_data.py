@@ -54,6 +54,7 @@ from dither_engine import (
     DitherConfig,
     build_all_conditions,
     validate_condition_ids_unique,
+    BOOLEAN_FIELDS,
     save_dithered_condition,
     save_dither_reference,
 )
@@ -244,23 +245,125 @@ def generate_baseline_input(
 # STEP 3: DITHER CONDITIONS
 # ============================================================================
 
+# ============================================================================
+# PERTURBATION VALIDITY CHECK — runs before any condition is written
+# ============================================================================
+#
+# Added 2026-08 after an audit found the engine silently failing to
+# perturb data the way the hypotheses assumed: acquisition_channel never
+# changed at any magnitude (missing code branch); small-integer counts
+# barely changed (support_tickets_open 7.9%, payment_failures 2.8% at 15%,
+# since multiplicative drift rounds 1 or 2 back to itself and 0 stays 0);
+# and H3's "correlated" arm was no more coherent than its uncorrelated arm.
+# None of these raised an error. This check asks, for every condition,
+# "did the data actually get perturbed the way the hypothesis claims?" —
+# for free, before any API spend.
+
+def check_condition_validity(config, dithered, min_exposure: float = 0.80) -> Dict[str, Any]:
+    """
+    Per-field EXPOSURE: share of perturbed customers whose field actually
+    changed (from _dither_fields, which lists only fields that changed).
+      - numeric / categorical fields: must meet min_exposure (default 80%).
+        Drift rates across fields are only comparable when exposure is
+        comparable.
+      - boolean fields: exposure is BY DESIGN equal to magnitude (flip
+        probability), so it's checked against the magnitude within a 3-SE
+        binomial tolerance instead of the 80% bar. Cross-field comparisons
+        involving booleans must use the evaluator's exposure-adjusted
+        drift rate.
+
+    COHERENCE (coupled H3 conditions only): among customers where every
+    field moved, the share whose joint movement matches the coupling signs.
+      - correlated arm: must be >= 95%
+      - uncorrelated arm: must sit near chance, 2 / 2^k (both signs of the
+        shared pattern), within 0.08
+    """
+    perturbed = [c for c in dithered if c.get("_dither_applied")]
+    failures, exposure = [], {}
+    n = len(perturbed)
+    if n == 0:
+        return {"condition_id": config.condition_id, "passed": False,
+                "failures": ["no customers were perturbed"], "field_exposure": {}}
+
+    for f in config.fields:
+        n_changed = sum(1 for c in perturbed if f in c["_dither_fields"])
+        n_blocked = sum(1 for c in perturbed if f in c.get("_dither_blocked", []))
+        n_possible = n - n_blocked
+        raw_rate = n_changed / n
+        # Denominator excludes customers for whom a move was structurally
+        # IMPOSSIBLE (e.g. payment_failures=0, drawn direction=down) — not
+        # customers the mechanism simply failed to move, which is exactly
+        # what this check exists to catch. n_blocked=0 for every field
+        # type except numeric drift, where the concept applies.
+        possible_rate = (n_changed / n_possible) if n_possible else None
+        exposure[f] = {
+            "raw_rate":      round(raw_rate, 4),
+            "n_blocked":     n_blocked,
+            "possible_rate": round(possible_rate, 4) if possible_rate is not None else None,
+        }
+        if f in BOOLEAN_FIELDS:
+            mag = config.get_magnitude(f)
+            tol = 3 * (mag * (1 - mag) / n) ** 0.5 + 0.01
+            if abs(raw_rate - mag) > tol:
+                failures.append(f"boolean {f}: exposure {raw_rate:.1%} outside "
+                                f"expected {mag:.1%} +/- {tol:.1%}")
+        elif possible_rate is not None and possible_rate < min_exposure:
+            failures.append(f"{f}: possible-move exposure {possible_rate:.1%} "
+                            f"below {min_exposure:.0%} ({n_blocked} of {n} "
+                            f"customers structurally blocked, correctly excluded)")
+
+    coherence = None
+    if config.coupling_signs is not None:
+        signs = config.coupling_signs
+        fields = list(signs)
+        judged = coherent = 0
+        for c in perturbed:
+            if not all(f in c["_dither_fields"] for f in fields):
+                continue
+            d = {f: (1 if c[f] > c["_dither_original"][f] else -1) for f in fields}
+            judged += 1
+            if all(d[a] * d[b] == signs[a] * signs[b]
+                   for i, a in enumerate(fields) for b in fields[i + 1:]):
+                coherent += 1
+        rate = coherent / judged if judged else 0.0
+        chance = 2 / (2 ** len(fields))
+        coherence = {"rate": round(rate, 4), "n_judged": judged, "chance": chance}
+        if config.correlated and rate < 0.95:
+            failures.append(f"correlated arm coherence {rate:.1%} below 95%")
+        if not config.correlated and abs(rate - chance) > 0.08:
+            failures.append(f"uncorrelated arm coherence {rate:.1%} not near chance {chance:.0%}")
+
+    return {"condition_id": config.condition_id, "passed": not failures,
+            "failures": failures, "field_exposure": exposure,
+            "coherence": coherence, "n_perturbed": n}
+
+
 def generate_all_conditions(
     customers: List[Dict[str, Any]],
     output_dir: Path,
     only_condition: str = None,
+    min_exposure: float = 0.80,
+    allow_invalid: bool = False,
 ) -> None:
     """
-    Generate agent input + reference files for all 44 unconditional H1,
+    Generate agent input + reference files for all 50 unconditional H1,
     H2, H3, H4, H7, H8a dither conditions. If only_condition is specified,
     regenerate just that one condition (useful for debugging without
-    regenerating all 44).
+    regenerating all 50).
+
+    Every condition passes check_condition_validity() BEFORE its files are
+    written. A failing condition is not written at all (so the agent runner
+    can never pick up data that doesn't perturb what its hypothesis claims),
+    the full report is saved to validity_report.json, and the script exits
+    with an error. allow_invalid=True writes everything anyway, for
+    deliberate debugging only.
 
     H8b is NOT included here — it is conditional on agent decisions that
     do not exist yet at this point in the pipeline (H8a's
     h1_category_purchase_behavior, h1_category_risk_factors, and
     h8a_pair2_purchase_risk must all have been run through the agent
     first). See check_and_generate_h8b.py, run after the agent has
-    processed all 44 conditions here.
+    processed all 50 conditions here.
     """
     print(f"\n{'='*60}")
     print("STEP 3: Dither Conditions")
@@ -279,10 +382,29 @@ def generate_all_conditions(
 
     print(f"\nGenerating {len(all_configs)} condition(s)...\n")
 
+    validity_results = []
     for config in all_configs:
         print(f"  [{config.condition_id}]")
         engine = DitherEngine(config)
         dithered = engine.apply(customers)
+
+        validity = check_condition_validity(config, dithered, min_exposure)
+        validity_results.append(validity)
+        def _fmt(e):
+            s = f"{e['raw_rate']:.0%}"
+            if e["possible_rate"] is not None and e["n_blocked"] > 0:
+                s += f" ({e['possible_rate']:.0%} of possible, {e['n_blocked']} blocked)"
+            return s
+        exp_str = ", ".join(f"{f}={_fmt(r)}" for f, r in validity["field_exposure"].items())
+        coh = validity.get("coherence")
+        coh_str = f" | coherence {coh['rate']:.0%} (chance {coh['chance']:.0%})" if coh else ""
+        print(f"    exposure: {exp_str}{coh_str}")
+        if not validity["passed"]:
+            for msg in validity["failures"]:
+                print(f"    ❌ INVALID: {msg}")
+            if not allow_invalid:
+                print(f"    -> NOT written")
+                continue
 
         with_record_ids = assign_record_ids(dithered, prefix="COND")
 
@@ -311,7 +433,23 @@ def generate_all_conditions(
         print(f"    agent_input.jsonl      ({len(agent_facing)} records)")
         print(f"    dither_reference.json  ({n_dithered} dithered)")
 
-    print(f"\n  Done — {len(all_configs)} condition(s) generated")
+    report_path = output_dir / "validity_report.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    failed = [v for v in validity_results if not v["passed"]]
+    with open(report_path, "w") as f:
+        json.dump({"min_exposure": min_exposure, "n_conditions": len(validity_results),
+                   "n_failed": len(failed), "conditions": validity_results}, f, indent=2)
+    print(f"\n  Validity report: {report_path}")
+
+    if failed and not allow_invalid:
+        ids = ", ".join(v["condition_id"] for v in failed)
+        raise SystemExit(
+            f"\n❌ {len(failed)} condition(s) failed the perturbation validity "
+            f"check and were NOT written: {ids}\nSee {report_path}. Do not run "
+            f"the agent until these are fixed.")
+    print(f"  ✅ Done — {len(validity_results) - len(failed)} condition(s) "
+          f"generated, all passing the validity check"
+          + (f" ({len(failed)} INVALID written anyway via --allow-invalid)" if failed else ""))
 
 
 # ============================================================================
@@ -342,6 +480,12 @@ Examples:
         help="Output directory (default: experiments_output)")
     parser.add_argument("--baseline-only", action="store_true",
         help="Generate ground truth and baseline input only, skip dither conditions")
+    parser.add_argument("--min-exposure", type=float, default=0.80,
+        help="Minimum share of perturbed customers whose non-boolean field "
+             "must actually change (default: 0.80)")
+    parser.add_argument("--allow-invalid", action="store_true",
+        help="Write conditions that fail the validity check anyway "
+             "(debugging only — never run the agent on these)")
     parser.add_argument("--condition", type=str, default=None,
         help="Regenerate only this specific condition_id")
 
@@ -361,7 +505,9 @@ Examples:
 
     # Step 3: Dither conditions (unless baseline-only)
     if not args.baseline_only:
-        generate_all_conditions(customers, output_dir, only_condition=args.condition)
+        generate_all_conditions(customers, output_dir, only_condition=args.condition,
+                                min_exposure=args.min_exposure,
+                                allow_invalid=args.allow_invalid)
 
     print(f"\n{'#'*60}")
     print("# DONE")

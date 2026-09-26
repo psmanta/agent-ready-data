@@ -201,6 +201,7 @@ class DitherConfig:
     correlated:        bool = True
     segment_filter:    Optional[List[str]] = None
     recompute_derived: bool = True
+    coupling_signs:    Optional[Dict[str, int]] = None
     seed:              int = 42
     condition_id:      str = "dither_condition"
 
@@ -243,6 +244,20 @@ class DitherConfig:
                 raise ValueError(f"Unknown field '{f}'. Check NUMERIC_FIELD_META, "
                                  f"CATEGORICAL_FIELD_META, and BOOLEAN_FIELDS.")
 
+        if self.coupling_signs is not None:
+            if set(self.coupling_signs) != set(self.fields):
+                raise ValueError(
+                    f"coupling_signs keys {sorted(self.coupling_signs)} must "
+                    f"exactly match fields {sorted(self.fields)}")
+            bad = {f: s for f, s in self.coupling_signs.items() if s not in (+1, -1)}
+            if bad:
+                raise ValueError(f"coupling_signs values must be +1 or -1, got {bad}")
+            non_numeric = [f for f in self.fields if f not in NUMERIC_FIELD_META]
+            if non_numeric:
+                raise ValueError(f"coupling requires numeric fields; got {non_numeric}")
+            if self.dither_type != ["drift"]:
+                raise ValueError("coupling is only defined for dither_type=['drift']")
+
     def get_magnitude(self, field_name: str) -> float:
         if isinstance(self.magnitude, dict):
             return self.magnitude.get(field_name, 0.15)
@@ -259,9 +274,35 @@ class DitherConfig:
 # FIELD DITHERERS
 # ============================================================================
 
-def _dither_numeric_drift(value, field_name, magnitude, direction, rng):
+def _dither_numeric_drift(value, field_name, magnitude, direction, rng, strict=False):
+    """
+    strict=False (default, all non-H3 conditions): direction is a BIAS —
+        +1/-1 means 85% probability of moving that way, 0 means 50/50.
+    strict=True (H3 coupled conditions only): direction is EXACT — the
+        sign has already been decided upstream by the coupling logic in
+        _resolve_directions(), and must not be re-randomized here, or the
+        85/15 bias would leak back in and the two H3 arms would stop
+        having matched marginal odds.
+
+    MINIMUM ±1 STEP FOR INTEGER FIELDS (added 2026-08 after an exposure
+    audit): drift is multiplicative, so a small count like 1 or 2 times
+    ~15% rounds straight back to itself, and 0 times anything stays 0.
+    At 15% magnitude, support_tickets_open changed for only 7.9% of
+    customers and payment_failures for only 2.8% — versus ~100% for
+    continuous fields — so drift rates across fields were silently
+    measuring different amounts of exposure, not different agent
+    sensitivity. Any perturbed integer now moves at least one unit in the
+    drawn direction. Remaining limit, reported rather than hidden: a value
+    already at its floor that is drawn to move DOWN (e.g. 0 tickets) is
+    clipped and cannot change — the generator's validity report
+    quantifies this per condition.
+    """
     meta = NUMERIC_FIELD_META[field_name]
-    if direction == +1:
+    if strict:
+        if direction not in (+1, -1):
+            raise ValueError(f"strict mode requires direction +1 or -1, got {direction}")
+        sign = direction
+    elif direction == +1:
         sign = +1 if rng.random() < 0.85 else -1
     elif direction == -1:
         sign = -1 if rng.random() < 0.85 else +1
@@ -272,7 +313,13 @@ def _dither_numeric_drift(value, field_name, magnitude, direction, rng):
     new_value = value + (value * actual_magnitude * sign)
     new_value = max(meta["min"], min(meta["max"], new_value))
 
-    return int(round(new_value)) if meta["type"] == "int" else round(new_value, 3)
+    if meta["type"] == "int":
+        new_int = int(round(new_value))
+        if new_int == value:
+            new_int = int(max(meta["min"], min(meta["max"], value + sign)))
+        blocked = new_int == value
+        return new_int, blocked
+    return round(new_value, 3), False
 
 
 def _dither_numeric_entry_error(value, field_name, magnitude, rng):
@@ -296,11 +343,20 @@ def _dither_numeric_entry_error(value, field_name, magnitude, rng):
         candidate = max(meta["min"], min(meta["max"], value * factor))
         return int(round(candidate)) if meta["type"] == "int" else round(candidate, 3)
 
-    # Default: random non-directional perturbation
+    # Default: random non-directional perturbation. Same minimum-step
+    # fix as _dither_numeric_drift (added 2026-08) — this fallback is the
+    # same multiplicative computation and had the identical bug: a small
+    # integer times ~15% rounds back to itself. Found by checking whether
+    # the pattern that broke drift also existed elsewhere in the file.
     sign = +1 if rng.random() < 0.5 else -1
     new_value = value + (value * magnitude * rng.uniform(0.5, 1.5) * sign)
     new_value = max(meta["min"], min(meta["max"], new_value))
-    return int(round(new_value)) if meta["type"] == "int" else round(new_value, 3)
+    if meta["type"] == "int":
+        new_int = int(round(new_value))
+        if new_int == value:
+            new_int = int(max(meta["min"], min(meta["max"], value + sign)))
+        return new_int
+    return round(new_value, 3)
 
 
 def _dither_email(email, tier, rng):
@@ -400,12 +456,37 @@ def _dither_boolean(value: bool, magnitude: float, rng: random.Random) -> bool:
     return value
 
 
+def _dither_acquisition_channel(value, tier, rng):
+    """
+    Single-select categorical: swap to a uniformly-chosen DIFFERENT
+    channel (the rule locked earlier for single-select categoricals —
+    once a value is corrupted, pick uniformly among the other N-1
+    options). The minimal/moderate tier distinction has no natural
+    meaning for an unordered channel label, so both tiers behave the
+    same; documented rather than invented.
+
+    Channel list imported from the base generator rather than
+    duplicated, so the two can never drift out of sync.
+    """
+    from base_customer_generator import ACQUISITION_CHANNELS
+    others = [c for c in ACQUISITION_CHANNELS if c != value]
+    return rng.choice(others) if others else value
+
+
 def _dither_categorical(value, field_name, tier, rng):
     if field_name == "email":   return _dither_email(value, tier, rng)
     if field_name == "name":    return _dither_name(value, tier, rng)
     if field_name == "phone":   return _dither_phone(value, tier, rng)
     if field_name == "address": return _dither_address(value, tier, rng)
-    return value
+    if field_name == "acquisition_channel":
+        return _dither_acquisition_channel(value, tier, rng)
+    # Fail loudly rather than silently return the value unchanged — a
+    # silent fall-through here is exactly how acquisition_channel went
+    # undithered at every magnitude without anything noticing.
+    raise ValueError(
+        f"No categorical dither implementation for '{field_name}'. It is "
+        f"listed in CATEGORICAL_FIELD_META but has no branch here."
+    )
 
 
 # ============================================================================
@@ -434,6 +515,7 @@ class DitherEngine:
                 dithered = copy.deepcopy(customer)
                 dithered["_dither_applied"]  = False
                 dithered["_dither_fields"]   = []
+                dithered["_dither_blocked"]  = []
                 dithered["_dither_original"] = {}
                 dithered["_dither_config"]   = self.config.condition_id
             results.append(dithered)
@@ -447,6 +529,7 @@ class DitherEngine:
     def _apply_to_record(self, customer):
         original_values = {}
         changed_fields = []
+        blocked_fields = []
         directions = self._resolve_directions()
 
         for field_name in self.config.fields:
@@ -455,46 +538,100 @@ class DitherEngine:
             original_value = customer[field_name]
             magnitude = self.config.get_magnitude(field_name)
             current_value = original_value
+            field_blocked = False
 
             for dither_type in self.config.dither_type:
-                current_value = self._dither_field(
+                current_value, was_blocked = self._dither_field(
                     current_value, field_name, magnitude,
                     dither_type, directions.get(field_name, 0)
                 )
+                field_blocked = field_blocked or was_blocked
 
             if current_value != original_value:
                 original_values[field_name] = original_value
                 customer[field_name] = current_value
                 changed_fields.append(field_name)
+            elif field_blocked:
+                # Targeted for dithering, and structurally could not move —
+                # value already sat at the boundary the drawn direction
+                # pushed toward (e.g. payment_failures=0, direction=down).
+                # Distinct from a field the mechanism simply failed to
+                # move, which is what the validity check exists to catch.
+                blocked_fields.append(field_name)
 
         if self.config.recompute_derived and changed_fields:
             self._recompute_derived(customer)
 
         customer["_dither_applied"]  = True
         customer["_dither_fields"]   = changed_fields
+        customer["_dither_blocked"]  = blocked_fields
         customer["_dither_original"] = original_values
         customer["_dither_config"]   = self.config.condition_id
         return customer
 
     def _dither_field(self, value, field_name, magnitude, dither_type, direction):
+        """Returns (new_value, was_blocked). was_blocked is only ever
+        True/False for numeric drift (the only path where the concept of
+        a structurally-impossible move applies); every other path
+        returns False, since categorical/boolean corruption always
+        produces some value even when it happens to equal the original."""
         if field_name in NUMERIC_FIELD_META:
             if dither_type == "drift":
-                return _dither_numeric_drift(value, field_name, magnitude, direction, self.rng)
+                return _dither_numeric_drift(value, field_name, magnitude, direction, self.rng,
+                                             strict=self.config.coupling_signs is not None)
             elif dither_type == "entry_error":
-                return _dither_numeric_entry_error(value, field_name, magnitude, self.rng)
+                return _dither_numeric_entry_error(value, field_name, magnitude, self.rng), False
         elif field_name in CATEGORICAL_FIELD_META:
             tier = self.config.get_categorical_tier(field_name)
-            return _dither_categorical(value, field_name, tier, self.rng)
+            return _dither_categorical(value, field_name, tier, self.rng), False
         elif field_name in BOOLEAN_FIELDS:
             # Boolean fields ignore dither_type (drift/entry_error) — a
             # flip is a flip regardless of "mechanism," since there's no
             # meaningful distinction between a boolean decaying over time
             # vs. an automation artifact flipping it. Both dither_type
             # values route to the same flip-probability logic.
-            return _dither_boolean(value, magnitude, self.rng)
-        return value
+            return _dither_boolean(value, magnitude, self.rng), False
+        return value, False
 
     def _resolve_directions(self):
+        """
+        Two modes.
+
+        COUPLED (coupling_signs set — H3 only). Replaces the original
+        definition of "correlated" as "each field drifts in its own
+        natural aging direction," which an audit showed does NOT produce
+        coherent joint shifts: Pair 1 (churn+nps) was 52.5% vs 52.0%
+        coherent across arms — identical — because nps has no natural
+        direction, and the triplet's "correlated" arm was LESS coherent
+        (10.8%) than its uncorrelated arm (27.3%), since pushing spend and
+        churn both "up" contradicts their r=-0.58. The natural-direction
+        mechanism also gave the arms different MARGINAL odds (85/15 vs
+        50/50), confounding coherence with directional bias.
+
+          correlated=True:  one fair coin per customer sets a shared
+              direction; each field follows it times its coupling sign
+              (its empirically verified correlation sign relative to the
+              set). Fields move coherently with each other.
+          correlated=False: each field gets its own independent fair
+              coin. Coherence is left to chance.
+
+        Both arms give every field exactly 50/50 odds of moving up or
+        down, so the ONLY thing that differs between arms is whether the
+        fields move together — which is the thing H3 tests. For reference
+        sets (fields with no real relationship), "correlated" simply means
+        synchronized, so any reference delta isolates the mechanical
+        effect of synchronized movement — exactly what the GEE
+        difference-in-differences subtracts.
+
+        NATURAL (coupling_signs None — every other condition): unchanged
+        original behavior, preserved so nothing outside H3 moves.
+        """
+        if self.config.coupling_signs is not None:
+            if self.config.correlated:
+                shared = +1 if self.rng.random() < 0.5 else -1
+                return {f: shared * s for f, s in self.config.coupling_signs.items()}
+            return {f: (+1 if self.rng.random() < 0.5 else -1) for f in self.config.fields}
+
         directions = {}
         for f in self.config.fields:
             if f in NUMERIC_FIELD_META:
@@ -519,9 +656,10 @@ class DitherEngine:
 # ============================================================================
 #
 # Condition counts per the amendment (H4 reduced from 6 to 3 — see below):
-#   H1: 12   H2: 12   H3: 11   H4: 3   H7: 4   H8a: 2   H8b: 0-1 (conditional)
-#   Total: 44-45 (was 47-48 in the amendment before the H2/H4 reuse decision
-#   below was locked at build time)
+#   H1: 14   H2: 12   H3: 15   H4: 3   H7: 4   H8a: 2   H8b: 0-1 (conditional)
+#   Total: 50-51 (H1 +2 comparison fields; H3 +4 after the field-composition
+#   correction, the payment_failures individual condition, and the reference
+#   sets gaining the correlated arms the GEE DiD requires)
 
 def build_h1_conditions(seed: int = 42) -> List[DitherConfig]:
     """
@@ -541,6 +679,17 @@ def build_h1_conditions(seed: int = 42) -> List[DitherConfig]:
         conditions.append(DitherConfig(
             fields=[f], magnitude=0.15, dither_type=["drift"], correlated=True,
             seed=seed + i, condition_id=f"h1_individual_{f}"))
+
+    # --- 2 comparison-group individual fields (amendment: H1 12 -> 14) ---
+    # email (Identity) and is_vip (Account Status) close the only two
+    # categories with zero individually-tested fields. Both are predicted-
+    # null COMPARISON fields for Question A, not top-5 fields. These were
+    # in the amended design but missing from this builder until an audit
+    # caught it — evaluate_h1.py loads both.
+    for i, f in enumerate(["email", "is_vip"]):
+        conditions.append(DitherConfig(
+            fields=[f], magnitude=0.15, dither_type=["drift"], correlated=True,
+            seed=seed + 10 + i, condition_id=f"h1_individual_{f}"))
 
     # --- 6 category-level conditions (engine-verified field lists) ---
     # dob excluded from identity — not currently dither-capable (no defined
@@ -622,52 +771,75 @@ def build_h2_conditions(seed: int = 42) -> List[DitherConfig]:
 
 def build_h3_conditions(seed: int = 42) -> List[DitherConfig]:
     """
-    H3 — Internal Consistency (restructured per amendment).
+    H3 — Internal Consistency (restructured; field composition corrected
+    and coupling mechanism redefined, 2026-08).
 
-    11 conditions: 3 correlated field pairs + 1 triplet, each tested
-    correlated vs. uncorrelated (8 conditions); 2 new individual-field
-    conditions to complete 2x2 directionality for pair 3 and the reference
-    pair; 1 uncorrelated reference pair (genuinely independent fields, no
-    "correlated" arm since there's no real correlation to respect).
+    15 conditions:
+      - 4 test sets x 2 arms (8): three pairs + one triplet, each field set
+        verified against the base generator to correlate through genuine
+        common-cause structure (or, for Pair 2, documented direct
+        derivation). Original Pair 1, Pair 3, and the triplet's third
+        member were found to have r~0 — indistinguishable from the null
+        reference — and were replaced. See "A Note on Assumed vs. Forced
+        Correlation" in the design amendment.
+      - 3 individual-field conditions completing 2x2 directionality where
+        no individual condition exists elsewhere (avg_resolution_time_hours,
+        refund_rate, payment_failures). All other H3 fields already have
+        individual conditions in H1/H2.
+      - 2 reference sets x 2 arms (4): a 2-field and a 3-field null set
+        (all pairwise |r| < 0.022, verified). Both arms are REQUIRED —
+        the GEE difference-in-differences estimates the group x arm
+        interaction, which is not estimable without a reference-correlated
+        cell. The 3-field reference matches the triplet's perturbation
+        volume (k=3), removing the confound of comparing a 3-field
+        perturbation against a 2-field reference.
+
+    Coupling: every test and reference set uses coupling_signs (see
+    DitherEngine._resolve_directions) — correlated arm = shared direction
+    times each field's verified correlation sign; uncorrelated arm =
+    independent fair coins; identical 50/50 marginal odds in both arms.
+
+    recompute_derived=True in BOTH arms. The original design left derived
+    fields stale only in the uncorrelated arm, which added a second
+    difference between arms (e.g. is_at_risk inconsistent with churn) and
+    contradicted the later protected-fields decision that no hypothesis
+    studies derived-field mismatch.
     """
-    conditions = []
-
-    field_sets = [
-        (["churn_risk_score", "last_purchase_days_ago"], "pair1_churn_purchase"),
-        (["total_spend", "lifetime_value_estimate"],     "pair2_spend_ltv"),
-        (["support_tickets_open", "avg_resolution_time_hours"], "pair3_support"),
-        (["total_spend", "last_purchase_days_ago", "support_tickets_open"], "triplet"),
+    # Coupling signs relative to a shared latent direction, from verified
+    # correlations (n=2000, seed=42):
+    #   churn_risk_score <-> nps_score:              r = -0.72
+    #   total_spend <-> lifetime_value_estimate:     r = +0.99 (direct derivation)
+    #   support_tickets_open <-> payment_failures:   r = +0.51
+    #   triplet: spend<->tickets -0.28, spend<->churn -0.58, tickets<->churn +0.59
+    #     (sign structure is internally consistent: "disengaging account" =
+    #      spend down, tickets up, churn up)
+    #   references: all pairwise |r| < 0.022 -> synchronized (+1 all)
+    SETS = [
+        ("pair1_churn_nps",        {"churn_risk_score": +1, "nps_score": -1}),
+        ("pair2_spend_ltv",        {"total_spend": +1, "lifetime_value_estimate": +1}),
+        ("pair3_support_payment",  {"support_tickets_open": +1, "payment_failures": +1}),
+        ("triplet",                {"total_spend": -1, "support_tickets_open": +1,
+                                    "churn_risk_score": +1}),
+        ("reference_pair",         {"avg_resolution_time_hours": +1, "refund_rate": +1}),
+        ("reference_triplet",      {"avg_resolution_time_hours": +1, "refund_rate": +1,
+                                    "tenure_months": +1}),
     ]
-    for i, (fields, name) in enumerate(field_sets):
+
+    conditions = []
+    for i, (name, signs) in enumerate(SETS):
         for j, correlated in enumerate([True, False]):
             suffix = "correlated" if correlated else "uncorrelated"
             conditions.append(DitherConfig(
-                fields=fields, magnitude=0.15, dither_type=["drift"],
-                correlated=correlated,
-                recompute_derived=not correlated,
+                fields=list(signs), magnitude=0.15, dither_type=["drift"],
+                correlated=correlated, coupling_signs=dict(signs),
+                recompute_derived=True,
                 seed=seed + i * 2 + j,
                 condition_id=f"h3_{name}_{suffix}"))
 
-    # Individual conditions to complete the 2x2 directionality check.
-    # (churn_risk_score, last_purchase_days_ago, total_spend,
-    # lifetime_value_estimate, support_tickets_open all already exist
-    # individually via H1/H2 — only these two are new.)
-    conditions.append(DitherConfig(
-        fields=["avg_resolution_time_hours"], magnitude=0.15,
-        dither_type=["drift"], correlated=True,
-        seed=seed + 100, condition_id="h3_individual_avg_resolution_time_hours"))
-    conditions.append(DitherConfig(
-        fields=["refund_rate"], magnitude=0.15,
-        dither_type=["drift"], correlated=True,
-        seed=seed + 101, condition_id="h3_individual_refund_rate"))
-
-    # Uncorrelated reference pair — genuinely independent fields (verified:
-    # neither is segment-conditioned, neither derives from the other).
-    # No "correlated" arm — there's no real correlation to respect.
-    conditions.append(DitherConfig(
-        fields=["avg_resolution_time_hours", "refund_rate"],
-        magnitude=0.15, dither_type=["drift"], correlated=False,
-        seed=seed + 102, condition_id="h3_reference_uncorrelated"))
+    for k, f in enumerate(["avg_resolution_time_hours", "refund_rate", "payment_failures"]):
+        conditions.append(DitherConfig(
+            fields=[f], magnitude=0.15, dither_type=["drift"], correlated=True,
+            seed=seed + 100 + k, condition_id=f"h3_individual_{f}"))
 
     return conditions
 
@@ -820,7 +992,7 @@ def build_all_conditions(seed: int = 42) -> List[DitherConfig]:
     orchestration script (generate_dithered_data.py) after checking the
     additive-baseline threshold.
 
-    Returns 44 conditions total (12+12+11+3+4+2). H8b (0-1 more) is
+    Returns 50 conditions total (14+12+15+3+4+2). H8b (0-1 more) is
     handled outside this function.
     """
     return (

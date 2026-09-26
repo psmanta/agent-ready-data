@@ -77,6 +77,65 @@ different problems wearing the same symptom.
 
 ---
 
+## A Note on Perturbation Validity
+
+An exposure audit, checking what SHARE of perturbed customers actually
+had their field change, not just whether the mechanism ran without
+error, found two real bugs, neither of which had raised an exception.
+
+**`acquisition_channel` never changed at any magnitude, ever.** The
+categorical dither dispatcher had no branch for it and silently returned
+the value unchanged. `h1_category_segmentation` had been testing
+`tenure_months` alone since the category was defined — its second field
+was never actually dithered. Fixed by adding the missing branch, and by
+making the dispatcher raise an error on any future categorical field with
+no implementation, rather than silently pass it through.
+
+**Small-integer fields barely changed at all.** Numeric drift is
+multiplicative (value × ~15%); for a count like 1 or 2, that rounds back
+to itself, and 0 stays 0 regardless of magnitude. At 15% magnitude,
+`support_tickets_open` — one of H1's self-reported top-5 fields — changed
+for only 7.9% of customers; `payment_failures` for 2.8%, versus 94–100%
+for every continuous field. A field's drift rate was partly measuring how
+many customers got touched, not how much the agent cares — exactly the
+kind of confound this project has repeatedly hunted down elsewhere.
+Fixed with a minimum ±1 step: any customer selected for perturbation now
+moves at least one unit. The same bug existed a second time, in
+`entry_error`'s fallback path, found by checking whether the pattern that
+broke `drift` existed elsewhere — fixed identically.
+
+**One residual, expected limit, measured rather than hidden:** a value
+already at its floor (e.g. 0 tickets) that is drawn to move DOWN cannot
+move regardless of the fix — there's nowhere to go. The engine now
+records this as `_dither_blocked` per customer per field, and the
+generator's validity check excludes structurally-blocked customers from
+the exposure denominator, so a genuine floor case is not confused with a
+broken mechanism. Both are measured and reported separately.
+
+**`generate_dithered_data.py` now runs a validity check on every
+condition before writing it** — per-field exposure (with the blocked-move
+adjustment above), and for H3's coupled conditions, coherence of the
+joint movement. A condition that fails is not written, the full report is
+saved to `validity_report.json`, and generation exits with an error. This
+runs before any API call, at zero cost, and would have caught both bugs
+above immediately.
+
+**Cross-field drift comparisons must use exposure-adjusted drift, not raw
+drift.** Raw drift rate averages over untouched customers; when fields
+differ in exposure (boolean fields by design flip ~15% of customers at
+15% magnitude, versus ~100% for most continuous fields), raw rates aren't
+comparable across fields. `evaluate_core.py`'s
+`compute_effective_drift_rate()` restricts to customers actually
+perturbed (using `_dither_fields`, which lists only fields that changed —
+no new metadata needed). Conditioning on "was perturbed" does not
+introduce the selection-bias problem raised for H3's confidence metric:
+perturbation is set by the dither's own random draw (treatment
+assignment), never by the agent's outcome. H1's Question A now uses this
+adjustment throughout.
+
+
+---
+
 ## A Note on Statistical Methodology
 
 `evaluate_core.py` uses seven statistical tools across the evaluator. Each
@@ -104,6 +163,21 @@ function docstrings.
 | Does a dithering condition degrade reasoning coherence across the whole customer population? | Mann-Whitney U on pooled per customer scores (same tool as the per customer diagnostic, just aggregated across customers) | The same baseline texts feed both a customer's dithered vs baseline scores and their own self similarity scores. Pooling across the population treats correlated data as independent, the identical mistake McNemar's was built to avoid for drift rate | **Wilcoxon signed-rank test** on each customer's own paired difference (dithered coherence minus baseline coherence), reduced to one number per customer before testing. The per customer Mann-Whitney diagnostic (`jaccard_dispersion_test`) remains valid *within* a single customer's own two small score sets. It was never wrong, only wrong to pool across customers. |
 
 **The generalized principle, stated plainly:** Any comparison across two conditions applied to the *same* 1,000 customer population is a paired comparison, not an independent samples comparison. Binary outcomes need McNemar's, continuous outcomes need Wilcoxon signed-rank. This applies beyond Jaccard: any future comparison across magnitude levels or dither types for the same field (H2, H4) needs the same treatment, not a naive two-sample test.
+
+ **An eighth tool.** H2's magnitude ladder and H7's breadth ladder both compare more than two paired conditions on the same population — McNemar's only handles pairs.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| Does drift rate differ anywhere across a >2-level paired ladder for the same field? | Running all pairwise McNemar's directly | Multiple comparisons inflate the family-wise error rate; the ladder is ordered, so an omnibus gate followed by adjacent-step tests is both more rigorous and more interpretable | **Cochran's Q** (chi-square approximation — its asymptotic validity depends on customer count, ~1,000, not condition count, unlike every other exact-over-approximate choice here) as an omnibus gate, adjacent-step McNemar's only if significant. Verified via a proven identity: reduces exactly to McNemar's uncorrected chi-square at k=2 (confirmed to 9 decimal places), plus a cliff-then-plateau scenario confirming the gate localizes rather than masks a real effect. |
+
+**A ninth tool.** H3's reference comparisons needed a binary difference-in-differences test.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| Does breaking a real correlation cost MORE drift than breaking a pair with no relationship? | (a) McNemar's comparing a real pair's uncorrelated arm directly to the reference's; (b) Wilcoxon on per-customer double differences | (a) confounds correlation-breaking with field leverage. (b) ~60% of customers land at exactly zero under realistic drift rates (verified by simulation), gutting power | **Binary DiD via GEE** (logit link, clustered by customer, robust sandwich SEs). Verified via planted-effect simulation: null stays silent (OR=1.09, p=0.55), a true effect is recovered with a CI containing the planted value (OR=2.17 vs. true ≈2.43), and a sign-reversal check confirms direction is meaningful. A deliberate reversal of the position taken for Cochran's Q — `statsmodels` is added to `requirements.txt` because no simpler tool answers this question correctly. |
+
+ **A tenth entry, not a new tool — a correction to how the existing tools are fed.** An exposure audit found fields differ enormously in how many customers a condition actually touches (booleans ~15% by design, some small-integer counts as low as 2.8% before an engine fix, versus ~100% for continuous fields). Raw drift rate partly measures exposure, not agent sensitivity. **Exposure-adjusted drift rate** — computed only among customers actually perturbed — is used for every cross-field comparison (H1's Question A throughout). Conditioning on "was perturbed" does not introduce selection bias: perturbation is set by the dither's own random draw, never by the agent's outcome.
+
 
 ## Forward-Looking Note: Paired Comparisons Beyond H1/H3
 
@@ -400,61 +474,153 @@ study (see Deferred Items below).
 
 3 field pairs + 1 triplet, each tested correlated (fields drift together,
 staying internally plausible) vs. uncorrelated (fields drift independently,
-breaking expected correlations), at matched 15% magnitude:
-
-- Pair 1: churn_risk_score + last_purchase_days_ago
-- Pair 2: total_spend + lifetime_value_estimate
-- Pair 3: support_tickets_open + avg_resolution_time_hours
-- Triplet: total_spend + last_purchase_days_ago + support_tickets_open
+breaking expected correlations), at matched 15% magnitude.
 
 ### What stress-testing surfaced
 
-**Granularity of the outcome measure.** Due to a limited number of decision buckets,
-binary drift (did the decision bucket change) cannot distinguish a confident 
-correlated-arm shift from a visibly conflicted uncorrelated-arm shift landing on 
-the same bucket. **Fix:** report three things per condition, not just the decision: 
-(1) binary drift rate, (2) mean `agent_confidence` within customers who drifted, 
-correlated vs. uncorrelated, (3) Jaccard similarity between dithered and baseline 
-reasoning text, as a coherence signal (shared machinery with H5's secondary metric).
+**Granularity of the outcome measure.** Due to a limited number of decision
+buckets, binary drift (did the decision bucket change) cannot distinguish a
+confident correlated-arm shift from a visibly conflicted uncorrelated-arm
+shift landing on the same bucket. **Fix:** report three things per condition,
+not just the decision: (1) binary drift rate, (2) confidence, handled
+separately below, (3) Jaccard similarity between dithered and baseline
+reasoning text, as a coherence signal (shared machinery with H5's secondary
+metric).
 
-**An uncorrelated reference baseline.** Rather than treating "correlated vs.
-uncorrelated" as the only axis, a genuinely unrelated field pair, one with no
-real-world relationship and no shared segment-conditioning, gives a
-reference point: "this is what dithering unrelated things looks like." Chosen:
-**`avg_resolution_time_hours` + `refund_rate`**. Neither is segment
-conditioned, neither derives from the other. The three genuinely-correlated
-pairs' drift rates are read *against* this reference rather than in isolation.
+**Assumed correlation that didn't exist.** Two of the three originally-
+specified pairs (`churn_risk_score`+`last_purchase_days_ago`,
+`support_tickets_open`+`avg_resolution_time_hours`) sounded plausible but had
+essentially zero actual correlation in the base generator (r≈+0.017,
+r≈−0.014 respectively) — statistically indistinguishable from a
+deliberately-null reference pair (r≈−0.001). See "A Note on Assumed vs.
+Forced Correlation." Replaced with fields verified to correlate through
+genuine common-cause structure (shared segment conditioning):
 
-**Directionality (the 2x2).** "Uncorrelated" as originally scoped didn't
-distinguish (field A changed, B didn't) from (B changed, A didn't) from (both
-changed). This matters if one field carries all the effect and the other is
-inert, that's a different finding than genuine joint sensitivity. Checked
-against existing conditions before assuming new ones were needed:
+- Pair 1: `churn_risk_score` + `nps_score` (r=−0.72)
+- Pair 2: `total_spend` + `lifetime_value_estimate` (r=+0.99 — direct
+  derivation, documented as a borderline case rather than glossed over,
+  judged acceptable because it mirrors a standard real-world CRM heuristic)
+- Pair 3: `support_tickets_open` + `payment_failures` (r=+0.51)
+- Triplet: `total_spend` + `support_tickets_open` + `churn_risk_score`
+  (r=−0.28, −0.58, +0.59 — every pairwise direction reinforces the
+  "disengaging high-value account" narrative)
 
-- **Pair 1** (churn_risk_score + last_purchase_days_ago): both individual
-  conditions already exist in H1 so this is **free**, 2x2 complete at no added cost
-- **Pair 2** (total_spend + lifetime_value_estimate): both individual
-  conditions already exist (H2, H1) so also **free**
-- **Pair 3** (support_tickets_open + avg_resolution_time_hours):
-  support_tickets_open exists in H1; avg_resolution_time_hours does not exist
-  anywhere so **one new condition required**
-- **Reference pair** (avg_resolution_time_hours + refund_rate): neither
-  exists individually so **two new conditions required**
-- **Triplet:** full 2x2x2 factorial would require 6 additional pairwise
-  conditions for a single triplet. **Declined** for cost purposes. Triplet remains
-  correlated/uncorrelated only. Full factorial breakdown on 3+ field
-  combinations explicitly deferred to Phase 2.
+**Correlation mechanism, redefined after an audit found the original
+definition non-functional.** The original design let each field drift in
+its own independently-assigned "natural" direction (e.g. `churn_risk_score`
+biased upward, `nps_score` with no defined direction), on the theory that
+both fields moving "naturally" would look coherent together. Measuring
+actual joint coherence found this did not work: Pair 1 was 52.5% coherent
+in the "correlated" arm versus 52.0% in "uncorrelated" — statistically
+identical — because `nps_score` has no natural direction to assign. The
+triplet's "correlated" arm measured LESS coherent (10.8%) than its own
+uncorrelated arm (27.3%), since pushing `total_spend` and `churn_risk_score`
+both "up" directly contradicts their verified r=−0.58. The mechanism also
+gave the two arms different marginal odds (85/15 bias vs. 50/50),
+confounding coherence with directional bias.
 
-### Condition set (11 total)
+Replaced with an explicit coupling mechanism: each field set gets a
+coupling sign per field (its verified correlation sign relative to the
+set). Correlated arm — one fair coin per customer sets a shared direction;
+each field follows it times its coupling sign. Uncorrelated arm — each
+field gets its own independent fair coin. Both arms give every field
+identical 50/50 marginal odds, so the only thing differing between arms is
+whether the fields move together. Re-verified after the fix: every coupled
+set's correlated arm shows ≥99% coherence; every uncorrelated arm sits
+within a few points of chance (50% for pairs, 25% for the triplet).
 
-25–26. `h3_pair1_churn_purchase_{correlated,uncorrelated}`
-27–28. `h3_pair2_spend_ltv_{correlated,uncorrelated}`
-29–30. `h3_pair3_support_{correlated,uncorrelated}`
-31–32. `h3_triplet_{correlated,uncorrelated}`
-33. `h3_individual_avg_resolution_time_hours` (fills Pair 3's 2x2)
-34. `h3_individual_refund_rate` (fills reference pair's 2x2)
-35. `h3_reference_uncorrelated` — avg_resolution_time_hours + refund_rate,
-    dithered together, uncorrelated
+`recompute_derived=True` in BOTH arms, not only the uncorrelated arm as
+originally specified — leaving derived fields stale in only one arm added
+a second, unintended difference between arms and contradicted the later
+decision that no hypothesis studies derived-field mismatch specifically.
+
+**An uncorrelated reference baseline.** Rather than treating "correlated
+vs. uncorrelated" as the only axis, a genuinely unrelated field set — no
+real-world relationship, no shared segment-conditioning — gives a
+reference point: "this is what dithering unrelated things looks like."
+Reference pair: `avg_resolution_time_hours` + `refund_rate` (r≈−0.001).
+Reference triplet: adding `tenure_months` (all three pairwise |r| < 0.022;
+`last_purchase_days_ago` was considered and excluded from this role
+specifically because it is *bounded by* `tenure_months` in the generator,
+producing a real if weak r=0.138 — not a clean null). The 3-field reference
+matches the test triplet's perturbation volume (k=3), so a reference
+comparison never conflates correlation-breaking with the sheer number of
+fields touched.
+
+**Direct comparison against the reference was found to be confounded and
+replaced with difference-in-differences.** Comparing Pair X's uncorrelated
+arm directly to the reference's uncorrelated arm conflates two different
+things: how broken the correlation is, and how much intrinsic decision-
+weight the agent places on Pair X's specific fields. Resolved via DiD:
+compute each set's own within-set delta (drift under decorrelation minus
+drift under correlation), which nets out field-leverage as a level effect
+shared by both arms of the same set, then compare that delta against the
+reference's own delta (which should be ~0). Implemented via
+`binary_did_gee()` — a GEE with a logit link, clustered by customer,
+testing the group × arm interaction directly on the raw binary outcome
+(see "A Note on Statistical Methodology"). Applied three times (each real
+pair or the triplet against its matching reference), so the headline
+finding is whether all comparisons consistently show a larger decorrelation
+cost than the reference, not whether any single test clears p<0.05 in
+isolation. Both arms of both reference sets are required — GEE's
+interaction term is not estimable without a reference-correlated cell.
+
+**Confidence-within-drifted-customers: methodology.** Comparing agent
+confidence between arms specifically "among customers who drifted" is a
+post-treatment conditioning problem — which customers count as "drifted"
+differs in composition between arms, since the arms differ in how potent
+they are at inducing drift. Comparing those two subsets directly would
+compare non-equivalent populations. Resolved as two complementary tests:
+
+- **Primary: full-population, unconditional paired comparison.** Every
+  customer contributes one paired difference (confidence under correlated
+  minus confidence under uncorrelated), regardless of drift status, tested
+  via `wilcoxon_signed_rank_test()`. Conditions on nothing, so the
+  selection-bias problem does not arise. Answers "does the type of
+  dithering shift confidence overall."
+- **Secondary, explicitly scoped: the "always-drifters" principal
+  stratum.** Same test, restricted to customers who drifted under BOTH
+  arms — holding customer-level susceptibility constant. Explicitly
+  disclosed as describing that subpopulation, not customers in general.
+- A mixed-effects model with a Treatment × Drift interaction term was
+  considered and declined: Drift here would be a covariate explaining a
+  DIFFERENT outcome (confidence) measured at the same time — a mediator,
+  since Drift is itself caused by treatment. Using it as a covariate does
+  not escape post-treatment conditioning, and no simple closed-form
+  verification case exists for it, unlike every other primitive in this
+  project.
+
+**Directionality (the free 2×2).** Checked against existing conditions
+before assuming new ones were needed:
+
+- Pair 1 (`churn_risk_score`+`nps_score`): both individual conditions
+  already exist in H1 — **free**
+- Pair 2 (`total_spend`+`lifetime_value_estimate`): both already exist
+  (H2, H1) — **free**
+- Pair 3 (`support_tickets_open`+`payment_failures`): `support_tickets_open`
+  exists in H1; `payment_failures` does not exist anywhere — **one new
+  condition required**
+- Reference pair: neither exists individually — **two new conditions
+  required**
+- Reference triplet: `avg_resolution_time_hours` and `refund_rate` already
+  exist individually; `tenure_months` exists via H2 — **free**
+- Triplet: full 2×2×2 factorial would require 6 additional pairwise
+  conditions. **Declined** — remains correlated/uncorrelated only; full
+  factorial breakdown on 3+ field combinations explicitly deferred to
+  Phase 2.
+
+### Condition set (15 total)
+
+`h3_pair1_churn_nps_{correlated,uncorrelated}`
+`h3_pair2_spend_ltv_{correlated,uncorrelated}`
+`h3_pair3_support_payment_{correlated,uncorrelated}`
+`h3_triplet_{correlated,uncorrelated}`
+`h3_reference_pair_{correlated,uncorrelated}`
+`h3_reference_triplet_{correlated,uncorrelated}`
+`h3_individual_avg_resolution_time_hours`
+`h3_individual_refund_rate`
+`h3_individual_payment_failures`
+
 
 ---
 
@@ -921,12 +1087,15 @@ from the main pipeline, but does not belong in the core hypothesis set.
 |---|---|---|
 | H1 | 7 | 14 |
 | H2 | 4 | 12 |
-| H3 | 8 | 11 |
+| H3 | 8 | 15 |
 | H4 | 2 | 3 |
 | H7 (new) | — | 4 |
 | H8a (new) | — | 2 |
 | H8b (new) | — | 0–1 (conditional) |
-| **Total** | **21** | **46–47** |
+| **Total** | **21** | **50-51** |
+
+(H1=14 + H2=12 + H3=15 + H4=3 + H7=4 + H8a=2 + H8b=0–1)
+
 
 At n=1,000 customers per condition: 46,000–47,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
 

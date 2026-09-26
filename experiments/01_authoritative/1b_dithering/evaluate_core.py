@@ -5,7 +5,7 @@ Evaluate Core — Experiment 1b: Dithering
 The Agentic Data Contract · Pillar 1: Authoritative
 
 Shared primitives used by every evaluate_h*.py hypothesis file. "Bard
-Hall in one file". Every statistical tool used anywhere in 1b's
+Hall in one file" — every statistical tool used anywhere in 1b's
 evaluation lives here, implemented and verified once, rather than
 re-derived per hypothesis file where a subtle divergence could hide.
 
@@ -308,6 +308,46 @@ def compute_drift_rate(condition_records: List[Dict[str, Any]]) -> float:
         raise ValueError("No records to compute drift rate from")
     n_drifted = sum(1 for r in condition_records if r["drifted"])
     return n_drifted / len(condition_records)
+
+
+def compute_effective_drift_rate(
+    condition_records: List[Dict[str, Any]],
+    field: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    EXPOSURE-ADJUSTED drift rate: drift among only the customers whose
+    data was actually perturbed — every customer listing `field` in
+    dither_fields if a field is given, otherwise every customer with at
+    least one changed field. (dither_fields lists only fields that
+    ACTUALLY changed, so no new metadata is needed.)
+
+    Why this exists: an exposure audit (2026-08) found fields differ
+    enormously in how many customers a condition actually touches —
+    booleans by design (~15% flip at 15% magnitude), and small-integer
+    counts by an engine limitation since fixed. Raw drift rate averages
+    over untouched customers, so comparing it ACROSS fields partly
+    measures how many customers were touched, not how much the agent
+    cares. Any cross-field comparison (H1's Question A in particular)
+    must use this.
+
+    Conditioning on "was perturbed" is valid, unlike the rejected
+    confidence-given-drift analysis: perturbation is set by the dither's
+    random draw (treatment assignment), never by the agent's outcome, so
+    no post-treatment selection bias is introduced.
+    """
+    if not condition_records:
+        raise ValueError("No records to compute drift rate from")
+    if field is None:
+        perturbed = [r for r in condition_records if r["dither_fields"]]
+    else:
+        perturbed = [r for r in condition_records if field in r["dither_fields"]]
+    n = len(perturbed)
+    return {
+        "effective_drift_rate": (sum(1 for r in perturbed if r["drifted"]) / n) if n else None,
+        "n_perturbed":          n,
+        "exposure":             n / len(condition_records),
+        "raw_drift_rate":       compute_drift_rate(condition_records),
+    }
 
 
 # ============================================================================
@@ -1053,6 +1093,7 @@ def cochrans_q_test(binary_matrix: List[List[bool]]) -> Dict[str, Any]:
 def align_drift_by_customer(
     records_a: List[Dict[str, Any]],
     records_b: List[Dict[str, Any]],
+    perturbed_only: bool = False,
 ) -> Tuple[List[bool], List[bool], int]:
     """
     Build aligned (same customer, same order) drift-boolean lists for
@@ -1071,6 +1112,13 @@ def align_drift_by_customer(
     defensively rather than assuming identical customer sets protects
     against a silent misalignment if that ever changes.
     """
+    # perturbed_only=True: restrict to customers actually perturbed in BOTH
+    # conditions — the exposure-adjusted paired comparison. Valid for the
+    # same reason compute_effective_drift_rate() is: perturbation is set by
+    # each condition's own random draw, never by agent outcomes.
+    if perturbed_only:
+        records_a = [r for r in records_a if r["dither_fields"]]
+        records_b = [r for r in records_b if r["dither_fields"]]
     by_customer_a = {r["customer_id"]: r["drifted"] for r in records_a}
     by_customer_b = {r["customer_id"]: r["drifted"] for r in records_b}
     shared_customers = sorted(set(by_customer_a) & set(by_customer_b))
@@ -1145,4 +1193,134 @@ def descriptive_trend_correlation(
             "rho close to +-1 is exploratory signal worth further "
             "investigation at larger sample size, not a validated finding."
         ),
+    }
+
+
+def binary_did_gee(
+    rows: List[Dict[str, Any]],
+    treatment_group: str,
+    reference_group: str,
+    group_col: str = "pair_type",
+    arm_col: str = "is_uncorrelated",
+    outcome_col: str = "drift",
+    cluster_col: str = "customer_id",
+    cov_struct: str = "independence",
+) -> Dict[str, Any]:
+    """
+    Binary difference-in-differences via a Generalized Estimating
+    Equation (logit link, clustered by customer). Tests whether the
+    effect of an arm (e.g. uncorrelated vs. correlated dithering) is
+    LARGER for a treatment group (e.g. a genuinely correlated field
+    pair) than for a reference group (e.g. a pair with no real
+    relationship to break).
+
+    WHY THIS EXISTS INSTEAD OF A WILCOXON ON PER-CUSTOMER DIFFERENCES:
+    the per-customer construction D_i - R_i (each a difference of two
+    binary drift outcomes) produces values in {-2,-1,0,+1,+2}. Wilcoxon
+    discards zero differences, and under realistic drift rates ~60% of
+    customers land at exactly zero (verified by simulation, 2026-08) —
+    gutting power — and the remaining mass sits on a handful of
+    discrete values, far from the continuous distribution Wilcoxon is
+    built around. GEE models the binary outcome directly, uses every
+    observation, and handles the within-customer clustering (each
+    customer contributes 4 correlated observations) via robust sandwich
+    standard errors.
+
+    WHY THIS IS DIFFERENT FROM THE REJECTED MIXED MODEL FOR CONFIDENCE:
+    that model used Drift as a covariate to explain Confidence — Drift
+    is itself an outcome caused by treatment (a mediator), so
+    conditioning on it reintroduces post-treatment selection bias.
+    Here, group and arm are both pure experimental design variables,
+    and drift is modeled as the outcome. No post-treatment conditioning,
+    so the interaction term cleanly estimates the DiD quantity.
+
+    The key estimate is the INTERACTION coefficient (group x arm), on
+    the log-odds scale: the extra change in log-odds of drift caused by
+    the arm, specifically in the treatment group, beyond what the arm
+    does to the reference group. Reported as an odds ratio (exp(beta)).
+    OR > 1 means decorrelating the treatment group costs MORE than
+    decorrelating the reference group.
+
+    Working correlation defaults to Independence, not Exchangeable:
+    GEE point estimates stay consistent and sandwich SEs stay valid even
+    under a misspecified working correlation, and Exchangeable's "every
+    pair of a customer's observations correlates equally" assumption
+    isn't obviously more correct here than Independence. Either is
+    selectable; Independence is the simpler, conservative default.
+
+    New dependency: statsmodels (added to requirements.txt deliberately —
+    a reversal of the position taken for Cochran's Q, where the simpler
+    approximation was sufficient. Here there is no simpler tool that
+    answers the question correctly).
+
+    Verified 2026-08 against synthetic data: a planted null (arm has
+    identical effect in both groups) stays non-significant; a planted
+    DiD effect (arm raises drift only in the treatment group) is
+    detected with the correct sign and an odds ratio near the planted
+    value.
+
+    rows: flat list, one dict per (customer, group, arm) observation.
+    """
+    import pandas as pd
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    df = pd.DataFrame(rows)
+    df = df[df[group_col].isin([treatment_group, reference_group])].copy()
+
+    required = {group_col, arm_col, outcome_col, cluster_col}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    df[outcome_col] = df[outcome_col].astype(int)
+    df[arm_col] = df[arm_col].astype(int)
+
+    # Degenerate-case guards: GEE on a constant outcome is undefined
+    if df[outcome_col].nunique() < 2:
+        return {"odds_ratio": None, "p_value": None,
+                "note": "Outcome has no variation (all drift or none) — "
+                        "DiD not estimable."}
+
+    cov = {
+        "independence": sm.cov_struct.Independence(),
+        "exchangeable": sm.cov_struct.Exchangeable(),
+    }[cov_struct]
+
+    # Explicit reference level, so the interaction sign always means
+    # "treatment group's extra arm effect," never alphabetical accident.
+    formula = (f"{outcome_col} ~ C({group_col}, Treatment(reference='{reference_group}'))"
+               f" * {arm_col}")
+    model = smf.gee(formula, groups=cluster_col, data=df,
+                    family=sm.families.Binomial(), cov_struct=cov)
+    res = model.fit()
+
+    # Locate the interaction term structurally rather than hardcoding
+    # statsmodels' formatted name (which embeds the Treatment() spec).
+    interaction_names = [n for n in res.params.index if ":" in n and arm_col in n]
+    if len(interaction_names) != 1:
+        raise RuntimeError(f"Could not uniquely identify interaction term: {list(res.params.index)}")
+    iname = interaction_names[0]
+
+    beta = float(res.params[iname])
+    ci_low, ci_high = res.conf_int().loc[iname]
+
+    # Raw drift rates per cell, for a human-readable companion to the OR
+    cell_rates = (df.groupby([group_col, arm_col])[outcome_col].mean().to_dict())
+    delta_treatment = cell_rates.get((treatment_group, 1), 0) - cell_rates.get((treatment_group, 0), 0)
+    delta_reference = cell_rates.get((reference_group, 1), 0) - cell_rates.get((reference_group, 0), 0)
+
+    return {
+        "treatment_group":   treatment_group,
+        "reference_group":   reference_group,
+        "interaction_logodds": beta,
+        "odds_ratio":        float(np.exp(beta)),
+        "odds_ratio_95ci":   [float(np.exp(ci_low)), float(np.exp(ci_high))],
+        "p_value":           float(res.pvalues[iname]),
+        "delta_treatment":   round(float(delta_treatment), 4),
+        "delta_reference":   round(float(delta_reference), 4),
+        "raw_did":           round(float(delta_treatment - delta_reference), 4),
+        "n_customers":       int(df[cluster_col].nunique()),
+        "n_observations":    int(len(df)),
+        "cov_struct":        cov_struct,
     }

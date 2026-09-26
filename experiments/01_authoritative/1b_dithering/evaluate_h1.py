@@ -32,8 +32,9 @@ from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaluate_core import (
-    load_condition, compute_drift_rate, attribute_by_field,
-    mcnemar_paired_test, mann_whitney_test, align_drift_by_customer,
+    load_condition, compute_drift_rate, compute_effective_drift_rate,
+    attribute_by_field, mcnemar_paired_test, mann_whitney_test,
+    align_drift_by_customer,
 )
 
 
@@ -113,29 +114,51 @@ def load_all_h1_conditions(
 
 def question_a_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
     """
-    Two complementary analyses, per 1b_DESIGN_AMENDMENT_1.md:
+    Two complementary analyses, per 1b_DESIGN_AMENDMENT_1.md — both on
+    EXPOSURE-ADJUSTED drift (drift among customers actually perturbed).
+
+    Why exposure-adjusted: an exposure audit (2026-08) showed fields
+    differ enormously in how many customers a condition touches — is_vip
+    flips for ~15% of customers by design, versus ~100% for
+    churn_risk_score. Raw drift rates would partly measure how many
+    customers were touched, not how much the agent cares, which would
+    bias the top-5 vs. comparison contrast (is_vip sits in the comparison
+    group). Raw rates and exposure are still reported alongside, so the
+    adjustment is visible rather than silent.
 
     1. Group-level check (SECONDARY): Mann-Whitney comparing 5 top-5
-       field drift rates against 6 comparison field drift rates as
-       independent summary statistics (genuinely independent — each is
-       one number per field's condition, not the same customers measured
-       twice). Explicitly low-powered given n=5 vs n=6; reported with
-       that caveat attached to the result, not just in documentation.
+       effective drift rates against 6 comparison effective drift rates —
+       independent summary statistics, one per field. Explicitly
+       low-powered (n=5 vs n=6 fields); caveat attached to the result.
 
-    2. Per-field check (PRIMARY): 30 pairwise McNemar's tests (5x6),
-       since comparing two fields' drift rates on the SAME 1,000-customer
-       population is a paired comparison. Headline finding is whether
-       the top-5 fields' advantage holds CONSISTENTLY across pairwise
-       comparisons, not any single test's p-value in isolation.
+    2. Per-field check (PRIMARY): 30 pairwise McNemar's tests (5x6), each
+       restricted to customers perturbed in BOTH conditions — the paired,
+       exposure-adjusted comparison. Headline finding is whether the
+       top-5 advantage holds CONSISTENTLY across pairs, not any single
+       p-value in isolation.
     """
-    top5_rates = {cid: compute_drift_rate(loaded[cid]) for cid in TOP5_FIELDS}
-    comparison_rates = {cid: compute_drift_rate(loaded[cid]) for cid in COMPARISON_FIELDS}
+    def rates_for(cid, field):
+        r = compute_effective_drift_rate(loaded[cid], field=field)
+        return r
 
-    # --- Secondary: group-level Mann-Whitney ---
-    group_result = mann_whitney_test(
-        list(top5_rates.values()), list(comparison_rates.values()),
-        label_a="top5", label_b="comparison",
-    )
+    top5 = {cid: rates_for(cid, f) for cid, f in TOP5_FIELDS.items()}
+    comparison = {cid: rates_for(cid, f) for cid, (f, _) in COMPARISON_FIELDS.items()}
+
+    def summarize(rate_dict, name_of):
+        return {
+            name_of(cid): {
+                "effective_drift_rate": round(r["effective_drift_rate"], 4) if r["effective_drift_rate"] is not None else None,
+                "raw_drift_rate":       round(r["raw_drift_rate"], 4),
+                "exposure":             round(r["exposure"], 4),
+                "n_perturbed":          r["n_perturbed"],
+            } for cid, r in rate_dict.items()
+        }
+
+    top5_eff = [r["effective_drift_rate"] for r in top5.values() if r["effective_drift_rate"] is not None]
+    comp_eff = [r["effective_drift_rate"] for r in comparison.values() if r["effective_drift_rate"] is not None]
+
+    # --- Secondary: group-level Mann-Whitney on effective rates ---
+    group_result = mann_whitney_test(top5_eff, comp_eff, label_a="top5", label_b="comparison")
     group_result["power_caveat"] = (
         "LOW POWER: n=5 vs n=6 fields. True sample size for this "
         "group-level question is the number of FIELDS tested, not the "
@@ -144,29 +167,28 @@ def question_a_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, An
         "effect at this sample size,' not 'no effect exists.'"
     )
 
-    # --- Primary: pairwise McNemar's ---
+    # --- Primary: pairwise McNemar's, perturbed-in-both customers only ---
     pairwise_results = []
-    top5_wins = 0
-    comparison_wins = 0
+    top5_wins = comparison_wins = 0
     for top5_cid, top5_field in TOP5_FIELDS.items():
         for comp_cid, (comp_field, _) in COMPARISON_FIELDS.items():
             drift_top5, drift_comp, n_shared = align_drift_by_customer(
-                loaded[top5_cid], loaded[comp_cid])
+                loaded[top5_cid], loaded[comp_cid], perturbed_only=True)
             mcnemar_result = mcnemar_paired_test(drift_top5, drift_comp)
 
-            top5_rate = top5_rates[top5_cid]
-            comp_rate = comparison_rates[comp_cid]
-            if top5_rate > comp_rate:
+            t_rate = top5[top5_cid]["effective_drift_rate"] or 0.0
+            c_rate = comparison[comp_cid]["effective_drift_rate"] or 0.0
+            if t_rate > c_rate:
                 top5_wins += 1
-            elif comp_rate > top5_rate:
+            elif c_rate > t_rate:
                 comparison_wins += 1
 
             pairwise_results.append({
-                "top5_field":      top5_field,
-                "comparison_field": comp_field,
-                "top5_drift_rate": round(top5_rate, 4),
-                "comparison_drift_rate": round(comp_rate, 4),
-                "n_shared_customers": n_shared,
+                "top5_field":                  top5_field,
+                "comparison_field":            comp_field,
+                "top5_effective_drift_rate":   round(t_rate, 4),
+                "comparison_effective_drift_rate": round(c_rate, 4),
+                "n_perturbed_in_both":         n_shared,
                 **mcnemar_result,
             })
 
@@ -174,19 +196,24 @@ def question_a_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, An
     n_significant = sum(1 for r in pairwise_results if r["p_value"] < 0.05)
 
     return {
-        "top5_drift_rates":       {TOP5_FIELDS[k]: round(v, 4) for k, v in top5_rates.items()},
-        "comparison_drift_rates": {COMPARISON_FIELDS[k][0]: round(v, 4) for k, v in comparison_rates.items()},
+        "adjustment_note": (
+            "All comparisons use EXPOSURE-ADJUSTED drift (drift among "
+            "customers actually perturbed). Raw rates and exposure shown "
+            "per field for transparency."
+        ),
+        "top5_fields":       summarize(top5, lambda cid: TOP5_FIELDS[cid]),
+        "comparison_fields": summarize(comparison, lambda cid: COMPARISON_FIELDS[cid][0]),
         "group_level_check_secondary": group_result,
         "pairwise_mcnemar_primary": {
-            "n_pairs":              n_pairs,
-            "n_significant_p05":    n_significant,
-            "top5_higher_drift_count": top5_wins,
+            "n_pairs":                       n_pairs,
+            "n_significant_p05":             n_significant,
+            "top5_higher_drift_count":       top5_wins,
             "comparison_higher_drift_count": comparison_wins,
             "consistency_note": (
-                f"Top-5 field showed higher drift in {top5_wins}/{n_pairs} "
-                f"pairwise comparisons. Headline finding is this "
-                f"consistency across comparisons, not any single pair's "
-                f"p-value in isolation."
+                f"Top-5 field showed higher exposure-adjusted drift in "
+                f"{top5_wins}/{n_pairs} pairwise comparisons. Headline finding "
+                f"is this consistency across comparisons, not any single "
+                f"pair's p-value in isolation."
             ),
             "all_pairs": pairwise_results,
         },
