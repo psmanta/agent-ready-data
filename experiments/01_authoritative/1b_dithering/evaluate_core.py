@@ -1324,3 +1324,37 @@ def binary_did_gee(
         "n_observations":    int(len(df)),
         "cov_struct":        cov_struct,
     }
+
+
+def align_values_by_customer(
+    records_a: List[Dict[str, Any]],
+    records_b: List[Dict[str, Any]],
+    field: str,
+    perturbed_only: bool = False,
+) -> Tuple[List[Any], List[Any], List[str]]:
+    """
+    Generalizes align_drift_by_customer() to any field, not just the
+    boolean 'drifted' outcome — e.g. pairing agent_confidence across two
+    conditions for the same customer. Same customer-intersection logic,
+    same defensive reasoning (conditions should share the same population
+    in practice, but intersecting rather than assuming protects against
+    silent misalignment).
+
+    perturbed_only: restrict to customers whose data was actually
+    perturbed in BOTH conditions (dither_fields non-empty) — the same
+    exposure-adjustment principle as align_drift_by_customer's option,
+    valid for the same reason: perturbation is set by each condition's
+    own random draw, never by the agent's outcome.
+
+    Returns (values_a, values_b, shared_customer_ids) — the customer id
+    list is returned (unlike the drift-specific version) since callers
+    of this generic version more often need it for further joins (e.g.
+    intersecting with ground truth stability tier).
+    """
+    if perturbed_only:
+        records_a = [r for r in records_a if r["dither_fields"]]
+        records_b = [r for r in records_b if r["dither_fields"]]
+    by_a = {r["customer_id"]: r[field] for r in records_a}
+    by_b = {r["customer_id"]: r[field] for r in records_b}
+    shared = sorted(set(by_a) & set(by_b))
+    return [by_a[c] for c in shared], [by_b[c] for c in shared], shared

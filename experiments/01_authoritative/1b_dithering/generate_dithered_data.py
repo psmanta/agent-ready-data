@@ -327,11 +327,23 @@ def check_condition_validity(config, dithered, min_exposure: float = 0.80) -> Di
                 coherent += 1
         rate = coherent / judged if judged else 0.0
         chance = 2 / (2 ** len(fields))
-        coherence = {"rate": round(rate, 4), "n_judged": judged, "chance": chance}
+        # Sample-size-adjusted tolerance, not a flat constant -- same
+        # principle as the boolean exposure check just above. A flat 0.08
+        # band is ~5 SE at n~1000 (safe) but only ~1.5 SE at a smoke
+        # test's n~100 (false-alarm-prone: an 8pp deviation from 50%
+        # chance is unremarkable sampling noise at that scale). Caught by
+        # running the free validity check at a smaller n than the real
+        # experiment specifically to stress-test cases n=1000 would never
+        # surface -- confirmed by reproducing the exact failure and
+        # computing its z-score (2.18, p=0.029) against a null of no bug.
+        coherence_tol = 3 * (chance * (1 - chance) / judged) ** 0.5 + 0.01 if judged else 0.08
+        coherence = {"rate": round(rate, 4), "n_judged": judged, "chance": chance,
+                    "tolerance": round(coherence_tol, 4)}
         if config.correlated and rate < 0.95:
             failures.append(f"correlated arm coherence {rate:.1%} below 95%")
-        if not config.correlated and abs(rate - chance) > 0.08:
-            failures.append(f"uncorrelated arm coherence {rate:.1%} not near chance {chance:.0%}")
+        if not config.correlated and abs(rate - chance) > coherence_tol:
+            failures.append(f"uncorrelated arm coherence {rate:.1%} not near chance "
+                            f"{chance:.0%} (+/-{coherence_tol:.1%} at n={judged})")
 
     return {"condition_id": config.condition_id, "passed": not failures,
             "failures": failures, "field_exposure": exposure,
