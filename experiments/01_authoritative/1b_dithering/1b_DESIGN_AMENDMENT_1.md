@@ -178,6 +178,18 @@ function docstrings.
 
  **A tenth entry, not a new tool — a correction to how the existing tools are fed.** An exposure audit found fields differ enormously in how many customers a condition actually touches (booleans ~15% by design, some small-integer counts as low as 2.8% before an engine fix, versus ~100% for continuous fields). Raw drift rate partly measures exposure, not agent sensitivity. **Exposure-adjusted drift rate** — computed only among customers actually perturbed — is used for every cross-field comparison (H1's Question A throughout). Conditioning on "was perturbed" does not introduce selection bias: perturbation is set by the dither's own random draw, never by the agent's outcome.
 
+**An eleventh tool.** H4 needed to compare three mechanisms (drift, plausible entry error, implausible entry error) at once, not just two.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| Does entry-error style (plausible vs. implausible) affect drift differently than drift itself, as two separate questions? | A 3-level factor with standard treatment coding (one reference level, two dummy variables) | Gets "plausible vs. drift" and "implausible vs. drift" directly, but "plausible vs. implausible" — H4's actual central question — has to be derived as a difference of two coefficients rather than read off directly, and a library's default contrast-coding convention is an easy place for a sign to silently flip | **Two hand-built orthogonal contrasts** (style: drift vs. average of both error types; plausibility: plausible vs. implausible directly), with an explicitly locked sign convention. Verified against three planted fixtures (Garbage Filter, Outlier Vulnerability, null) plus a direct orthogonality check — the style coefficient stayed flat while the plausibility coefficient swung from +1.60 to −1.57 across the two opposite scenarios. |
+
+**A twelfth entry, a gate rather than a tool.** H4's three fields each use a structurally different entry-error operator (scale swap, unit conversion, unit swap/default seeding) — pooling the eleventh tool's contrasts across fields risks averaging three different mechanisms into one misleading number.
+
+| Question | Naive first choice | Why it fails here | What we use instead |
+|---|---|---|---|
+| Is it safe to report one pooled plausibility effect across all three H4 fields? | Fit the pooled model and trust its p-value | Verified by simulation: a pooled coefficient near zero (mean −0.09) was statistically significant in 19 of 20 replicates despite describing neither of two genuinely opposite-sign fields (+1.3 and −1.7) — the danger isn't a null result, it's a confident, misleading small effect | **A joint Wald test on each contrast's interaction with Field**, fit in the same model as the pooled contrasts. Fired on 20/20 opposite-sign replicates and 30/30 mild-heterogeneity replicates, while firing falsely in only 2/40 replicates under a genuine null — confirming it's calibrated, not just trigger-happy. When it fires, per-field contrasts are the primary report; the pooled number becomes a footnote. |
+
 
 ## Forward-Looking Note: Paired Comparisons Beyond H1/H3
 
@@ -190,8 +202,13 @@ yet built:
   a two proportion test.
 - **H3's core comparison**: correlated vs. uncorrelated arms, same
   population. McNemar's again.
-- **H4's dither-type comparison**: drift vs. entry_error for the same
-  field, same population. McNemar's.
+- **H4's dither-type comparison**: evolved beyond this note's original
+  prediction once built. McNemar's per field remains the primary test
+  (drift vs. plausible, drift vs. implausible, same population), but H4
+  also needed a 3-level mechanism comparison (drift, plausible,
+  implausible) and a Field × Mechanism interaction gate to decide
+  whether pooling across fields is safe — see "A Note on Statistical
+  Methodology," eleventh and twelfth entries, and the full H4 section.
 - **H7's breadth ladder**: genuinely different from the other three:
   four paired conditions (1 field, 3, 6, all), not two. McNemar's only
   handles pairwise comparisons. The correct generalization to more than
@@ -668,15 +685,191 @@ changes, comparable in scope to H9. Named and reasoned through here; build
 decision revisited after the remaining hypothesis review and H4's two-type
 results are in hand.
 
+### The matched-definition decision: 100% prevalence, realistic intensity, not matched magnitude
+
+Two ways of calibrating "entry_error" against `drift`'s 15% magnitude were
+considered and rejected. **Matched prevalence** (apply entry_error to only
+15% of customers, matching drift's per-customer magnitude as if it were a
+rate) was rejected: it throws away 85% of the sample for no benefit, since
+prevalence and conditional drift risk are separable
+(`P(drift) = prevalence × conditional_risk`) and conditional risk is the
+property worth measuring precisely — practitioners can rescale by their own
+organization's prevalence afterward. **Matched population MAPE** (calibrate
+entry_error's average error across the population to ~15%) was rejected: at
+n=1,000, hitting a 15% population average with realistic (large) per-row
+errors means corrupting only ~2 customers, with no statistical power and a
+meaningless "15% average" blending a handful of huge errors with thousands
+of untouched rows.
+
+**Locked instead: 100% prevalence in both the drift and entry-error arms,
+with realistic, uncapped intensity for entry_error.** Forcing a realistic
+operator (unit conversion, scale swap) to a 15% numeric move would produce
+an artifact that doesn't exist in real pipelines — a 15% unit-conversion
+error isn't a thing. The comparison is explicitly "realistic entry error
+vs. realistic drift," not "same intensity, two mechanisms," and the
+resulting intensity mismatch is reported as context (see Metrics below),
+not hidden or corrected for.
+
+This is a deliberate feature, not an accepted flaw: if entry errors — much
+larger, uncapped — produce LESS drift than drift-type corruption, that is
+strong evidence the agent implicitly filters implausible values while
+missing small plausible drift, a genuinely informative finding either way
+the result lands.
+
+### The plausibility split: a 2×2 design, not a single operator
+
+A single-operator, 3-condition design (one realistic entry-error operator
+per field) was expanded to 6 conditions — a plausible (in-bounds) and an
+implausible (out-of-bounds) operator per field — after recognizing a
+3-condition design couldn't distinguish two different explanations for a
+null or negative result: "entry errors disrupt less because the agent
+filters obvious junk" vs. "entry errors just don't disrupt agent reasoning
+in general." Splitting plausible from implausible turns H4 into a
+mechanism study that directly answers which explanation is correct.
+
+This split also surfaced a genuine detectability gradient across the three
+fields, confirmed against the actual prompt (not assumed): `churn_risk_score`
+has an explicit stated range in the field glossary ("0.0-1.0, higher = more
+risk"); `total_spend` ("Lifetime spending amount") and `tenure_months`
+("How long they've been a customer") have no stated units or bounds. A
+scale-mismatch error on `churn_risk_score` violates a rule the agent was
+actually told; an equivalent error on the other two fields is only
+detectable by cross-referencing other fields or general implausibility.
+
+### The operator matrix (locked)
+
+| Field | Plausible — Up | Plausible — Down | Implausible — Up | Implausible — Down |
+|---|---|---|---|---|
+| `churn_risk_score` | Reset to `0.85` *(constant)* | Reset to `0.15` *(constant)* | ×100 *(personalized)* | ×−1 *(personalized)* |
+| `total_spend` | ×2.0 *(personalized)* | ÷10.0 *(personalized)* | ×100.0 *(personalized)* | ×−1 *(personalized)* |
+| `tenure_months` | ×1.3 *(personalized)* | ÷1.3 *(personalized)* | ×30 *(personalized)* | ×−1 *(personalized)* |
+
+Direction is a fair coin per customer, applied WITHIN each condition — not
+a separate condition axis. This does not change the condition count: 6
+conditions total (plausible + implausible per field), each producing a
+roughly balanced internal mix of up/down outcomes.
+
+### The direction confound: found and fixed
+
+The original single-operator design (one operator per field, always the
+same direction — e.g. `total_spend`'s only entry-error operator always
+moved spend down) meant any observed plausibility effect could really have
+been a direction effect, confounded further with decision-boundary
+position (a customer already at the top priority bucket can't be pushed
+further up). Balancing direction independently within BOTH the plausible
+and implausible arms removes this: the two arms now differ only in
+plausibility, never systematically in which way values move.
+
+**Direction is derived from the observed before/after comparison, never
+logged from the coin's intended label.** For constant-target operators
+(`churn_risk_score`'s plausible resets), a customer whose value already
+sits on the far side of the target experiences the opposite of what the
+coin intended — verified concretely: a customer at 0.880 who drew the "up"
+coin (target 0.85) actually decreases, and roughly 20% of customers sit far
+enough from the midpoint for this to matter in practice, not a rare edge
+case. The engine computes before/after values for every dithered field
+regardless, so deriving direction this way required no new infrastructure
+— only using data already produced.
+
+### Mechanism style: tracked as metadata, not forced into false uniformity
+
+`churn_risk_score`'s plausible cells are unavoidably constants — "system
+default persists" IS a fixed value in real life, and personalizing it
+would stop it from representing that failure mode. Its implausible cells
+are naturally personalized (a real scale-mismatch bug multiplies whatever
+the true value is, it doesn't emit the same wrong number for everyone).
+This gives `churn_risk_score` a style asymmetry between its plausible and
+implausible cells that `total_spend` and `tenure_months` don't have.
+Rather than forcing artificial uniformity that would misrepresent the real
+failure mode, `_dither_mechanism_style` (`constant`/`personalized`) is
+tracked as per-customer metadata, available to check as a candidate
+explanation if `churn_risk_score`'s results ever look anomalous relative
+to the other two fields.
+
+### Bounds bypass
+
+Every dithered value is normally clipped to the field's defined min/max.
+The implausible arm bypasses this clip entirely — a scale-swap to 39
+silently clamped back into [0,1] stops being a scale-swap and becomes
+just another mild drift. The bypass applies ONLY to implausible
+conditions; the plausible arm keeps normal clipping, since respecting the
+field's contract while still being wrong is exactly what makes it
+"plausible." The bypass skips RANGE validation only, not TYPE — an
+integer field stays integer-typed even out of range, matching how a real
+database enforces schema without enforcing business rules (the actual
+reason these errors reach production data at all).
+
+**A field-specific finding from testing this against real generated data,
+tracked rather than "fixed":** `total_spend`'s implausible-up operator
+(×100) only escapes the field's own 500,000 ceiling for customers whose
+original spend exceeds $5,000 — about 26% of the population, verified
+directly against 1,000 generated customers. `churn_risk_score` and
+`tenure_months`'s implausible-up operators escape bounds for ~98-99% of
+customers, because those fields' ceilings are small relative to typical
+values, while `total_spend`'s ceiling is large relative to its typical
+values (median ~$2,476). Inflating the multiplier to force a higher
+escape rate would sacrifice realism — a genuine dollars-vs-cents bug is
+×100, not some artificially larger factor chosen to guarantee a
+statistical property — so this was not changed. No new engine tracking
+was needed either: whether a given customer's dithered value escaped
+bounds is fully derivable from the existing before/after values and the
+field's own known bounds, so the evaluator computes and stratifies by
+this directly rather than the engine needing to record it separately.
+
+### Statistical plan
+
+**Primary, per field: McNemar's**, same shape as every other
+same-population comparison in this project — `drift_vs_plausible` and
+`drift_vs_implausible` separately, since every condition dithers the same
+1,000-customer population.
+
+**Secondary: `gee_style_plausibility_test()`** — two orthogonal contrasts
+on the 3-level Mechanism factor (drift / plausible / implausible), fit
+via GEE with a logit link, clustered by customer, using HAND-CONSTRUCTED
+numeric contrast columns rather than a statistics library's built-in
+Helmert contrast class — removes any risk of a silent sign flip from an
+unfamiliar internal convention. Style contrast (`drift=-2, plausible=+1,
+implausible=+1`): drift vs. the average of both entry-error types.
+Plausibility contrast (`drift=0, plausible=+1, implausible=-1`): plausible
+vs. implausible directly. **Locked sign convention:** positive &
+significant = Garbage Filter Effect (plausible errors slip through, cause
+MORE drift than implausible); negative & significant = Outlier
+Vulnerability (implausible errors disrupt the agent MORE than plausible
+ones). Verified with three synthetic fixtures: a planted Garbage Filter
+scenario came back positive and significant (p≈4×10⁻¹⁶⁰); a planted
+Outlier Vulnerability scenario came back negative and significant
+(p≈3×10⁻¹⁵²); a null scenario came back non-significant (p=0.61).
+Orthogonality between the two contrasts confirmed directly: the style
+coefficient stayed near zero across both planted scenarios while the
+plausibility coefficient swung from +1.60 to −1.57.
+
+**`gee_field_mechanism_interaction_gate()` decides whether pooling across
+fields is safe.** Each field uses a structurally different operator, so a
+pooled effect risks averaging qualitatively different mechanisms into one
+number. Verified by simulation: on a genuinely opposite-sign two-field
+scenario, the pooled plausibility coefficient came out near zero (mean
+−0.09, against true per-field effects of about +1.3 and −1.7) yet was
+statistically significant in 19 of 20 replicates — the failure mode is
+NOT "pooled model reports no effect," it is "pooled model confidently
+reports a small effect that describes neither field." The interaction
+gate fired in 20 of 20 replicates on that scenario, 30 of 30 on mild
+same-sign heterogeneity, and — the case that confirms it is calibrated
+rather than just over-triggering — fired falsely in only 2 of 40
+replicates under a genuine null where every field has the identical
+effect, matching the expected ~5% false-positive rate at α=0.05.
+**Consequence: per-field contrasts are H4's primary report whenever the
+gate fires; the pooled contrast is a footnote, not the headline.**
+
 ### Condition set (6 total)
 
-36–38. `h4_{churn_risk_score,total_spend,tenure_months}_drift`
-39–41. `h4_{churn_risk_score,total_spend,tenure_months}_entry_error`
+`h4_churn_risk_score_plausible`, `h4_churn_risk_score_implausible`,
+`h4_total_spend_plausible`, `h4_total_spend_implausible`,
+`h4_tenure_months_plausible`, `h4_tenure_months_implausible`.
 
-(Drift-type conditions for these three fields overlap with H2's 15%-magnitude
-conditions where applicable, to be confirmed at build time whether H4 can
-reuse H2's existing 15% drift conditions directly rather than regenerating
-them, which would reduce this to 3 new conditions instead of 6.)
+Drift-type conditions for these three fields are served directly by H2's
+existing 15%-magnitude conditions (`h2_{field}_mag15pct`) — confirmed at
+build time these can be reused directly rather than regenerated, reducing
+H4 to 6 new conditions, not 9.
 
 ---
 
@@ -709,7 +902,7 @@ fully transparent regex with word-boundary anchors closes this gap without
 introducing a stemming library dependency that's harder to audit by reading
 the code directly.
 
-### The frozen keyword list (final, 17 patterns)
+### The frozen keyword list (final, 25 patterns)
 
 **Direct inconsistency language:**
 ```
@@ -1088,16 +1281,16 @@ from the main pipeline, but does not belong in the core hypothesis set.
 | H1 | 7 | 14 |
 | H2 | 4 | 12 |
 | H3 | 8 | 15 |
-| H4 | 2 | 3 |
+| H4 | 2 | 6 |
 | H7 (new) | — | 4 |
 | H8a (new) | — | 2 |
 | H8b (new) | — | 0–1 (conditional) |
-| **Total** | **21** | **50-51** |
+| **Total** | **21** | **53-54** |
 
-(H1=14 + H2=12 + H3=15 + H4=3 + H7=4 + H8a=2 + H8b=0–1)
+(H1=14 + H2=12 + H3=15 + H4=6 + H7=4 + H8a=2 + H8b=0–1)
 
 
-At n=1,000 customers per condition: 46,000–47,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
+At n=1,000 customers per condition: 53,000–54,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
 
 Boundary expansion cost is a genuine open unknown, not a placeholder estimate. The mechanism now covers three tiers 
 (`deeply_boundary`, `lightly_boundary`, `tied_no_majority`, per the `aggregate_baseline.py` tied vote fix) with an adaptive 
@@ -1106,9 +1299,9 @@ not the earlier flat "minimum 25 runs" estimate this section previously cited. E
 combined boundary population turns out to be once the primary baseline actually runs. See `RESEARCH_NOTES.md`'s open 
 question tracking this same population split as a stochasticity finding in its own right.
 
-Total: roughly **51,000–52,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
+Total: roughly **58,000–59,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
 
-At 1a's observed per-record cost (~$0.00232/record): approximately **$118–121 at standard API pricing before boundary expansion, $59–61 with Batch API's 50% discount**.
+At 1a's observed per-record cost (~$0.00232/record): approximately **$135–137 at standard API pricing before boundary expansion, $67–68 with Batch API's 50% discount**.
 
 ---
 
@@ -1157,11 +1350,24 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$118–121 
   (avg_resolution_time_hours + refund_rate) added as a baseline comparison
   point. Full 2x2 directionality achieved for all three pairs (mostly free,
   reusing H1/H2 conditions); full factorial declined for the triplet.
-- **H4** restructured: 2 → 6 conditions. Reuses H2's field trio, resolving
-  both the single field problem and the churn_risk_score over concentration
-  concern. Third dither type (human origin error, Fork B) considered,
-  designed at a conceptual level, explicitly deferred.
-- **H5** fully specified: frozen 17-pattern regex keyword list (with
+- **H4** restructured: 2 → 6 conditions. Reuses H2's field trio (resolving
+  both the single-field problem and the churn_risk_score over-concentration
+  concern), but the design went substantially further during a dedicated
+  design session: expanded from one entry-error operator per field to a
+  plausible/implausible split (directly testing whether an agent implicitly
+  filters obvious junk while remaining vulnerable to stealthy, plausible
+  corruption), after which a direction confound was found and fixed
+  (direction is now derived from observed before/after values, never
+  logged from the coin that selected an operator), mechanism style
+  (constant vs. personalized) tracked as metadata rather than forced into
+  artificial uniformity, and a field-specific bounds-escape finding for
+  `total_spend` documented rather than "fixed" by sacrificing realism.
+  Two new GEE-based statistical tools built and verified
+  (`gee_style_plausibility_test()`, `gee_field_mechanism_interaction_gate()`
+  — see Statistical Methodology note). Third dither type (human origin
+  error, Fork B) considered, designed at a conceptual level, explicitly
+  deferred, unchanged from the original restructuring.
+- **H5** fully specified: frozen 25-pattern regex keyword list (with
   "uncertain about" deliberately excluded), Jaccard secondary metric shared
   with H3, manual audit methodology for false negative rate estimation,
   three-way cross tab (detected+changed / detected+unchanged / not detected).

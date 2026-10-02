@@ -137,6 +137,72 @@ PROTECTED_FIELDS: Dict[str, str] = {
 }
 
 # Entry error model targets
+# H4's plausible/implausible operator matrix — locked design, see
+# h4_working_doc.md. Distinct from ENTRY_ERROR_MODELS below (which is
+# generic, used by other conditions on other fields) — H4 needs
+# explicit, individually-designed operators for exactly these 3 fields,
+# not the generic dispatch.
+H4_OPERATOR_MATRIX = {
+    "churn_risk_score": {
+        "plausible":   {"up": ("constant", 0.85),  "down": ("constant", 0.15)},
+        "implausible": {"up": ("multiply", 100.0), "down": ("multiply", -1.0)},
+    },
+    "total_spend": {
+        "plausible":   {"up": ("multiply", 2.0),   "down": ("multiply", 0.1)},
+        "implausible": {"up": ("multiply", 100.0), "down": ("multiply", -1.0)},
+    },
+    "tenure_months": {
+        "plausible":   {"up": ("multiply", 1.3),   "down": ("multiply", 1/1.3)},
+        "implausible": {"up": ("multiply", 30.0),  "down": ("multiply", -1.0)},
+    },
+}
+
+
+def _dither_h4_entry_error(value, field_name, plausibility, rng):
+    """
+    H4's plausible/implausible entry-error operator. Direction is a fair
+    coin per customer, drawn here purely to select WHICH transform to
+    apply — the coin's label is intentionally NOT what gets logged as
+    this customer's direction. A constant-target operator (churn_risk_score's
+    plausible resets) can produce the opposite of its "intended" direction
+    for a customer who already sits on the far side of the target (e.g.
+    orig=0.92, coin says "up" -> target 0.85 -> actually a decrease).
+    Verified: roughly 20% of customers sit far enough from the midpoint
+    for this to matter in practice. The caller derives the REAL direction
+    from the observed before/after values, not from this coin.
+
+    Plausible arm respects the field's normal min/max bounds -- that
+    contract-respecting property is what makes it "plausible" at all.
+    Implausible arm skips the bounds clip entirely (the caller must pass
+    allow_out_of_bounds=True for this dither_type).
+
+    Returns (new_value, operator_label, mechanism_style). mechanism_style
+    is "constant" or "personalized" -- tracked as metadata because
+    churn_risk_score's plausible cells are unavoidably constant (a real
+    default-persistence bug IS a fixed value) while its implausible cells
+    are naturally personalized (a real scale-mismatch bug multiplies
+    whatever the true value is) -- an asymmetry that's a property of the
+    real failure modes being modeled, not an engine inconsistency, and is
+    tracked rather than forced into false uniformity.
+    """
+    coin = "up" if rng.random() < 0.5 else "down"
+    style, param = H4_OPERATOR_MATRIX[field_name][plausibility][coin]
+
+    if style == "constant":
+        new_value = param
+    else:
+        new_value = value * param
+
+    meta = NUMERIC_FIELD_META[field_name]
+    if plausibility == "plausible":
+        new_value = max(meta["min"], min(meta["max"], new_value))
+    # implausible: no clipping -- caller has set allow_out_of_bounds
+
+    new_value = int(round(new_value)) if meta["type"] == "int" else round(new_value, 4)
+    operator_label = f"{plausibility}_{style}_{coin}"
+    return new_value, operator_label, style
+
+
 ENTRY_ERROR_MODELS = {
     "unit_conversion":     ["total_spend", "lifetime_value_estimate",
                             "avg_order_value", "avg_resolution_time_hours"],
@@ -202,6 +268,7 @@ class DitherConfig:
     segment_filter:    Optional[List[str]] = None
     recompute_derived: bool = True
     coupling_signs:    Optional[Dict[str, int]] = None
+    entry_error_plausibility: Optional[str] = None  # "plausible" or "implausible" -- H4 only
     seed:              int = 42
     condition_id:      str = "dither_condition"
 
@@ -212,7 +279,7 @@ class DitherConfig:
                                  f"Valid: {list(MAGNITUDE_TIERS.keys())}")
             self.magnitude = MAGNITUDE_TIERS[self.magnitude]
 
-        valid_types = {"drift", "entry_error"}
+        valid_types = {"drift", "entry_error", "h4_entry_error"}
         for dt in self.dither_type:
             if dt not in valid_types:
                 raise ValueError(f"Unknown dither_type '{dt}'. Valid: {valid_types}")
@@ -243,6 +310,21 @@ class DitherConfig:
             if f not in all_known:
                 raise ValueError(f"Unknown field '{f}'. Check NUMERIC_FIELD_META, "
                                  f"CATEGORICAL_FIELD_META, and BOOLEAN_FIELDS.")
+
+        if self.entry_error_plausibility is not None:
+            if self.entry_error_plausibility not in ("plausible", "implausible"):
+                raise ValueError(
+                    f"entry_error_plausibility must be 'plausible' or "
+                    f"'implausible', got {self.entry_error_plausibility!r}")
+            if self.dither_type != ["h4_entry_error"]:
+                raise ValueError(
+                    "entry_error_plausibility is only defined for "
+                    "dither_type=['h4_entry_error']")
+            bad = [f for f in self.fields if f not in H4_OPERATOR_MATRIX]
+            if bad:
+                raise ValueError(
+                    f"entry_error_plausibility fields must be in "
+                    f"H4_OPERATOR_MATRIX, got unsupported fields: {bad}")
 
         if self.coupling_signs is not None:
             if set(self.coupling_signs) != set(self.fields):
@@ -518,6 +600,9 @@ class DitherEngine:
                 dithered["_dither_blocked"]  = []
                 dithered["_dither_original"] = {}
                 dithered["_dither_config"]   = self.config.condition_id
+                dithered["_dither_operator"] = {}
+                dithered["_dither_direction"] = {}
+                dithered["_dither_mechanism_style"] = {}
             results.append(dithered)
         return results
 
@@ -530,6 +615,16 @@ class DitherEngine:
         original_values = {}
         changed_fields = []
         blocked_fields = []
+        operators = {}          # field_name -> operator_label (H4 only)
+        mechanism_styles = {}   # field_name -> "constant"/"personalized" (H4 only)
+        directions_observed = {}  # field_name -> "up"/"down", DERIVED from
+                                  # before/after values, never from the
+                                  # coin that selected an operator -- see
+                                  # _dither_h4_entry_error's docstring for
+                                  # why the coin's label can't be trusted
+                                  # directly (a constant-target operator can
+                                  # move a customer the opposite way from
+                                  # what the coin intended).
         directions = self._resolve_directions()
 
         for field_name in self.config.fields:
@@ -539,18 +634,26 @@ class DitherEngine:
             magnitude = self.config.get_magnitude(field_name)
             current_value = original_value
             field_blocked = False
+            field_operator = None
+            field_mechanism_style = None
 
             for dither_type in self.config.dither_type:
-                current_value, was_blocked = self._dither_field(
+                current_value, was_blocked, operator_label, mechanism_style = self._dither_field(
                     current_value, field_name, magnitude,
                     dither_type, directions.get(field_name, 0)
                 )
                 field_blocked = field_blocked or was_blocked
+                field_operator = operator_label if operator_label is not None else field_operator
+                field_mechanism_style = mechanism_style if mechanism_style is not None else field_mechanism_style
 
             if current_value != original_value:
                 original_values[field_name] = original_value
                 customer[field_name] = current_value
                 changed_fields.append(field_name)
+                if field_operator is not None:
+                    operators[field_name] = field_operator
+                    mechanism_styles[field_name] = field_mechanism_style
+                    directions_observed[field_name] = "up" if current_value > original_value else "down"
             elif field_blocked:
                 # Targeted for dithering, and structurally could not move —
                 # value already sat at the boundary the drawn direction
@@ -562,36 +665,46 @@ class DitherEngine:
         if self.config.recompute_derived and changed_fields:
             self._recompute_derived(customer)
 
-        customer["_dither_applied"]  = True
-        customer["_dither_fields"]   = changed_fields
-        customer["_dither_blocked"]  = blocked_fields
-        customer["_dither_original"] = original_values
-        customer["_dither_config"]   = self.config.condition_id
+        customer["_dither_applied"]   = True
+        customer["_dither_fields"]    = changed_fields
+        customer["_dither_blocked"]   = blocked_fields
+        customer["_dither_original"]  = original_values
+        customer["_dither_config"]    = self.config.condition_id
+        customer["_dither_operator"]  = operators
+        customer["_dither_direction"] = directions_observed
+        customer["_dither_mechanism_style"] = mechanism_styles
         return customer
 
     def _dither_field(self, value, field_name, magnitude, dither_type, direction):
-        """Returns (new_value, was_blocked). was_blocked is only ever
-        True/False for numeric drift (the only path where the concept of
-        a structurally-impossible move applies); every other path
-        returns False, since categorical/boolean corruption always
-        produces some value even when it happens to equal the original."""
+        """Returns (new_value, was_blocked, operator_label, mechanism_style).
+        was_blocked is only ever True/False for numeric drift (the only
+        path where a structurally-impossible move applies). operator_label
+        and mechanism_style are only ever non-None for H4's dedicated
+        entry-error path -- every other path returns None for both, since
+        no other dither_type tracks a specific named operator today."""
         if field_name in NUMERIC_FIELD_META:
             if dither_type == "drift":
-                return _dither_numeric_drift(value, field_name, magnitude, direction, self.rng,
-                                             strict=self.config.coupling_signs is not None)
+                new_value, blocked = _dither_numeric_drift(
+                    value, field_name, magnitude, direction, self.rng,
+                    strict=self.config.coupling_signs is not None)
+                return new_value, blocked, None, None
             elif dither_type == "entry_error":
-                return _dither_numeric_entry_error(value, field_name, magnitude, self.rng), False
+                return _dither_numeric_entry_error(value, field_name, magnitude, self.rng), False, None, None
+            elif dither_type == "h4_entry_error":
+                new_value, operator_label, mechanism_style = _dither_h4_entry_error(
+                    value, field_name, self.config.entry_error_plausibility, self.rng)
+                return new_value, False, operator_label, mechanism_style
         elif field_name in CATEGORICAL_FIELD_META:
             tier = self.config.get_categorical_tier(field_name)
-            return _dither_categorical(value, field_name, tier, self.rng), False
+            return _dither_categorical(value, field_name, tier, self.rng), False, None, None
         elif field_name in BOOLEAN_FIELDS:
             # Boolean fields ignore dither_type (drift/entry_error) — a
             # flip is a flip regardless of "mechanism," since there's no
             # meaningful distinction between a boolean decaying over time
             # vs. an automation artifact flipping it. Both dither_type
             # values route to the same flip-probability logic.
-            return _dither_boolean(value, magnitude, self.rng), False
-        return value, False
+            return _dither_boolean(value, magnitude, self.rng), False, None, None
+        return value, False, None, None
 
     def _resolve_directions(self):
         """
@@ -656,7 +769,7 @@ class DitherEngine:
 # ============================================================================
 #
 # Condition counts per the amendment (H4 reduced from 6 to 3 — see below):
-#   H1: 14   H2: 12   H3: 15   H4: 3   H7: 4   H8a: 2   H8b: 0-1 (conditional)
+#   H1: 14   H2: 12   H3: 15   H4: 6   H7: 4   H8a: 2   H8b: 0-1 (conditional)
 #   Total: 50-51 (H1 +2 comparison fields; H3 +4 after the field-composition
 #   correction, the payment_failures individual condition, and the reference
 #   sets gaining the correlated arms the GEE DiD requires)
@@ -846,30 +959,48 @@ def build_h3_conditions(seed: int = 42) -> List[DitherConfig]:
 
 def build_h4_conditions(seed: int = 42) -> List[DitherConfig]:
     """
-    H4 — Dither Type Effects (restructured per amendment; reuse decision
-    locked at build time).
+    H4 — Dither Type Effects (restructured per h4_working_doc.md's full
+    design session: matched-definition decision, direction-confound fix,
+    mechanism-style tracking).
 
-    3 NEW conditions (entry_error only) across the same 3 fields H2 uses
-    (churn_risk_score, total_spend, tenure_months). The "drift" arm of
-    H4's comparison is NOT regenerated — it is served directly by H2's
-    existing 15%-magnitude conditions for these same fields
-    (h2_churn_risk_score_mag15pct, h2_total_spend_mag15pct,
-    h2_tenure_months_mag15pct), which use identical field/magnitude/type/
-    correlated parameters. Generating a separate, differently-seeded
-    "drift" condition here would mean running the agent against two
-    statistically-equivalent-but-not-identical datasets purely to answer
-    the same comparison twice — real wasted API spend for no analytical
-    benefit. The evaluator's H4 analysis must reference
+    6 NEW conditions: one plausible and one implausible entry-error
+    condition per field, across the same 3 fields H2 uses
+    (churn_risk_score, total_spend, tenure_months). Each condition
+    internally applies a fair coin per customer to select an up or down
+    variant from H4_OPERATOR_MATRIX — direction is NOT a separate
+    condition axis; it's derived per-customer from the observed
+    before/after values (see _apply_to_record), never logged from the
+    coin itself, since a constant-target operator can produce the
+    opposite of its "intended" direction for a customer already on the
+    far side of the target.
+
+    The "drift" arm of H4's comparison is NOT regenerated — it is served
+    directly by H2's existing 15%-magnitude conditions for these same
+    fields (h2_churn_risk_score_mag15pct, h2_total_spend_mag15pct,
+    h2_tenure_months_mag15pct). Generating a separate "drift" condition
+    here would mean running the agent against two statistically-
+    equivalent-but-not-identical datasets purely to answer the same
+    comparison twice. The evaluator's H4 analysis references
     h2_{field}_mag15pct's decisions directly as the "drift" data point
-    for each field, alongside these 3 new "entry_error" conditions.
+    for each field, alongside these 6 new plausible/implausible
+    conditions.
+
+    Locked at 100% prevalence (matches H2's drift arm, maximizes McNemar's
+    power) with realistic, uncapped intensity -- see "The matched
+    decision" in h4_working_doc.md for why matched-prevalence and
+    matched-MAPE alternatives were both rejected.
     """
     fields = ["churn_risk_score", "total_spend", "tenure_months"]
-    return [
-        DitherConfig(fields=[f], magnitude=0.15, dither_type=["entry_error"],
-                     correlated=True, seed=seed + i,
-                     condition_id=f"h4_{f}_entry_error")
-        for i, f in enumerate(fields)
-    ]
+    conditions = []
+    for i, f in enumerate(fields):
+        for j, plausibility in enumerate(["plausible", "implausible"]):
+            conditions.append(DitherConfig(
+                fields=[f], magnitude=0.15, dither_type=["h4_entry_error"],
+                correlated=True, entry_error_plausibility=plausibility,
+                seed=seed + i * 2 + j,
+                condition_id=f"h4_{f}_{plausibility}"))
+    return conditions
+
 
 
 def build_h7_conditions(seed: int = 42) -> List[DitherConfig]:
@@ -992,7 +1123,7 @@ def build_all_conditions(seed: int = 42) -> List[DitherConfig]:
     orchestration script (generate_dithered_data.py) after checking the
     additive-baseline threshold.
 
-    Returns 50 conditions total (14+12+15+3+4+2). H8b (0-1 more) is
+    Returns 53 conditions total (14+12+15+6+4+2). H8b (0-1 more) is
     handled outside this function.
     """
     return (

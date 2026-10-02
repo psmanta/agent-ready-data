@@ -273,6 +273,9 @@ def load_condition(
             "dither_fields":         dither_fields,
             "dither_original":       ref.get("_dither_original", {}),
             "dither_current_values": dither_current_values,
+            "dither_operator":       ref.get("_dither_operator", {}),
+            "dither_direction":      ref.get("_dither_direction", {}),
+            "dither_mechanism_style": ref.get("_dither_mechanism_style", {}),
             "customer_segment":      ref.get("customer_segment"),
             "ground_truth_decision": gt["final_decision"],
             "stability_tier":        gt["stability_tier"],
@@ -1358,3 +1361,197 @@ def align_values_by_customer(
     by_b = {r["customer_id"]: r[field] for r in records_b}
     shared = sorted(set(by_a) & set(by_b))
     return [by_a[c] for c in shared], [by_b[c] for c in shared], shared
+
+
+def gee_style_plausibility_test(
+    rows: List[Dict[str, Any]],
+    mechanism_col: str = "mechanism",
+    outcome_col: str = "drift",
+    cluster_col: str = "customer_id",
+    field_col: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    H4's mechanism comparison: two orthogonal contrasts on a 3-level
+    Mechanism factor (drift / plausible entry error / implausible entry
+    error), via GEE (logit link, clustered by customer).
+
+    Uses HAND-CONSTRUCTED numeric contrast columns, not a library's
+    built-in Helmert contrast class -- deliberately. A built-in class's
+    internal ordering/scaling convention is exactly the kind of thing
+    that can silently flip a sign without erroring. Building the columns
+    directly means what's in the data IS the convention: nothing to
+    misinterpret, and the same numeric columns used here are exactly
+    what the verification fixtures construct by hand.
+
+    Style contrast: drift=-2, plausible=+1, implausible=+1 (drift vs.
+        the average of both entry-error types).
+    Plausibility contrast: drift=0, plausible=+1, implausible=-1.
+        LOCKED SIGN CONVENTION:
+          positive & significant -> Garbage Filter Effect (plausible
+            errors slip through and cause MORE drift than implausible
+            ones, which the agent apparently recognizes as unphysical).
+          negative & significant -> Outlier Vulnerability (implausible,
+            unphysical errors disrupt the agent MORE than plausible
+            ones -- the opposite finding).
+
+    Neither contrast is meaningful for "drift" rows on the plausibility
+    axis (gradual drift has no plausibility dimension) -- drift=0 on
+    that contrast correctly removes it from that comparison entirely,
+    which is exactly why this needed hand-built columns rather than a
+    factor's default treatment coding.
+
+    Scope: tests the POOLED style/plausibility effect. Per the working
+    document, this should only be trusted as the headline finding if a
+    Field x Mechanism interaction check (built separately, on top of
+    this primitive) is NOT significant -- each field's entry-error
+    operator is structurally different, and a pooled effect could
+    average away a real per-field difference.
+    """
+    import pandas as pd
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    df = pd.DataFrame(rows)
+    valid = {"drift", "plausible", "implausible"}
+    if not set(df[mechanism_col].unique()) <= valid:
+        raise ValueError(f"mechanism_col must only contain {valid}, "
+                         f"got {set(df[mechanism_col].unique())}")
+
+    contrast_map = {"drift": (-2, 0), "plausible": (1, 1), "implausible": (1, -1)}
+    df["style_contrast"] = df[mechanism_col].map(lambda m: contrast_map[m][0])
+    df["plausibility_contrast"] = df[mechanism_col].map(lambda m: contrast_map[m][1])
+
+    if df[outcome_col].nunique() < 2:
+        return {"style_coefficient": None, "plausibility_coefficient": None,
+                "note": "Outcome has no variation -- not estimable."}
+
+    formula = f"{outcome_col} ~ style_contrast + plausibility_contrast"
+    if field_col:
+        formula += f" + C({field_col})"
+
+    model = smf.gee(formula, groups=cluster_col, data=df,
+                    family=sm.families.Binomial(), cov_struct=sm.cov_struct.Independence())
+    res = model.fit()
+
+    plaus_beta = float(res.params["plausibility_contrast"])
+    style_beta = float(res.params["style_contrast"])
+    ci = res.conf_int()
+    # SCALING (verified against a direct 2x2 odds calculation, 2026-08):
+    # the plausibility contrast is coded +1/-1, so its coefficient is HALF
+    # the log-odds gap between plausible and implausible; the odds ratio
+    # for plausible-vs-implausible is exp(2*beta), NOT exp(beta) (an
+    # earlier version of this function returned exp(beta), understating
+    # the effect). The style contrast is coded -2/+1/+1, so its coefficient
+    # is one THIRD of the gap between drift and the average entry-error
+    # log-odds; exp(3*beta) is the entry-error-vs-drift odds ratio, where
+    # "entry error" means the average on the LOG-ODDS scale.
+    interpretation = (
+        "Garbage Filter Effect: plausible errors cause more drift than implausible ones"
+        if plaus_beta > 0 else
+        "Outlier Vulnerability: implausible errors cause more drift than plausible ones"
+    )
+
+    return {
+        "style_coefficient":        float(res.params["style_contrast"]),
+        "style_p_value":            float(res.pvalues["style_contrast"]),
+        "plausibility_coefficient": plaus_beta,
+        "plausibility_p_value":     float(res.pvalues["plausibility_contrast"]),
+        "plausibility_odds_ratio":  float(np.exp(2 * plaus_beta)),  # plausible vs implausible
+        "plausibility_odds_ratio_95ci": [float(np.exp(2 * ci.loc["plausibility_contrast"][0])),
+                                         float(np.exp(2 * ci.loc["plausibility_contrast"][1]))],
+        "style_odds_ratio":         float(np.exp(3 * style_beta)),  # avg entry error (log-odds scale) vs drift
+        "interpretation":           interpretation,
+        "n_customers":              int(df[cluster_col].nunique()),
+        "n_observations":           int(len(df)),
+    }
+
+
+def gee_field_mechanism_interaction_gate(
+    rows: List[Dict[str, Any]],
+    field_col: str = "field",
+    mechanism_col: str = "mechanism",
+    outcome_col: str = "drift",
+    cluster_col: str = "customer_id",
+) -> Dict[str, Any]:
+    """
+    Decides whether the pooled style/plausibility contrasts from
+    gee_style_plausibility_test() are safe to report, or whether each
+    field's entry-error operator is different enough that per-field
+    contrasts must carry the conclusion instead.
+
+    Fits ONE model with both contrasts AND their interactions with
+    Field: drift ~ C(field) + style + plausibility + style:C(field) +
+    plausibility:C(field). A joint Wald test on each contrast's
+    interaction terms (2 coefficients per contrast, since Field has 3
+    levels) answers "does this contrast's effect differ by field."
+
+    Uses the exact same hand-built style_contrast/plausibility_contrast
+    columns as gee_style_plausibility_test() -- same sign convention,
+    same reasoning for hand-building rather than a library's Helmert
+    class. Term names for the joint Wald test are matched EXACTLY
+    ('style_contrast:C(field)', not a substring/":" search) -- verified
+    necessary, since a formula with two separate interaction groups
+    produces two distinctly-named terms, and a generic ":" match would
+    silently grab whichever one statsmodels happened to list first.
+
+    Verified by simulation (see h4_working_doc.md): on a genuinely
+    opposite-sign two-field scenario, this gate fired in 20/20
+    replicates; on MILD same-sign heterogeneity (per-field plausibility
+    effects of ~1.3 vs ~0.9), it still fired in 100/100. At n=1000 this
+    gate is powerful enough to catch nearly any real between-field
+    difference -- the intended conservative behavior: prefer
+    over-triggering per-field reporting over risking a misleading pooled
+    number (a pooled effect near zero was found significant in 19/20
+    replicates on the opposite-sign scenario despite describing neither
+    field).
+
+    Returns both interaction p-values and a boolean recommendation per
+    contrast. When a contrast is not safe to pool, gee_style_plausibility_test()
+    should be re-run separately for each field's own rows instead.
+    """
+    import pandas as pd
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    df = pd.DataFrame(rows)
+    contrast_map = {"drift": (-2, 0), "plausible": (1, 1), "implausible": (1, -1)}
+    valid = set(contrast_map)
+    if not set(df[mechanism_col].unique()) <= valid:
+        raise ValueError(f"{mechanism_col} must only contain {valid}, "
+                         f"got {set(df[mechanism_col].unique())}")
+
+    df["style_contrast"] = df[mechanism_col].map(lambda m: contrast_map[m][0])
+    df["plausibility_contrast"] = df[mechanism_col].map(lambda m: contrast_map[m][1])
+
+    formula = (f"{outcome_col} ~ C({field_col}) + style_contrast + plausibility_contrast + "
+               f"style_contrast:C({field_col}) + plausibility_contrast:C({field_col})")
+    model = smf.gee(formula, groups=cluster_col, data=df,
+                    family=sm.families.Binomial(), cov_struct=sm.cov_struct.Independence())
+    res = model.fit()
+
+    terms = res.wald_test_terms(scalar=True).table
+    style_term = f"style_contrast:C({field_col})"
+    plaus_term = f"plausibility_contrast:C({field_col})"
+    if style_term not in terms.index or plaus_term not in terms.index:
+        raise RuntimeError(
+            f"Expected interaction terms not found in Wald test table. "
+            f"Got: {terms.index.tolist()}")
+
+    style_p = float(terms.loc[style_term].iloc[1])
+    plaus_p = float(terms.loc[plaus_term].iloc[1])
+
+    return {
+        "style_interaction_p_value":        style_p,
+        "plausibility_interaction_p_value": plaus_p,
+        "safe_to_pool_style":               style_p >= 0.05,
+        "safe_to_pool_plausibility":        plaus_p >= 0.05,
+        "n_customers":                      int(df[cluster_col].nunique()),
+        "n_fields":                         int(df[field_col].nunique()),
+        "recommendation": (
+            "Per-field contrasts required for at least one axis -- pooled "
+            "result(s) would be descriptive only."
+            if (style_p < 0.05 or plaus_p < 0.05) else
+            "Pooled style and plausibility contrasts are safe to report "
+            "as the headline finding."
+        ),
+    }
