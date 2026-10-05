@@ -211,7 +211,19 @@ def load_condition(
         dither_applied (bool), dither_fields (list), dither_original (dict),
         customer_segment,
         ground_truth_decision, stability_tier, decision_source,
-        drifted (bool) — dithered_decision != ground_truth_decision
+        drifted (bool) — dithered_decision != ground_truth_decision,
+        dither_operator, dither_direction, dither_mechanism_style (H4 metadata),
+        h5_keyword_detected (bool), h5_keyword_patterns (list) — the frozen
+            25-pattern detection scan of dithered_reasoning. Anywhere-in-text:
+            cannot say WHICH field was doubted, so a coarse proxy only.
+        value_echo (dict field -> classify_value_echo result) — for each
+            dithered field, what the reasoning did to the value the agent was
+            shown (echo / echo_pct_marker / converted / magnitude_only /
+            omitted / not_applicable). Computed here, once, so H1-H4/H7/H8
+            get it without a retrofit or a second pass over the JSON. The
+            "shown" value is dither_reference's value, verified identical to
+            agent_input.jsonl's for all 6,859 dithered (record, field) pairs
+            across all 53 conditions at n=60 (0 mismatches).
     """
     dither_ref_path = condition_dir / "dither_reference.json"
     decisions_path = condition_dir / "decisions.jsonl"
@@ -262,6 +274,12 @@ def load_condition(
         dither_fields = ref.get("_dither_fields", [])
         dither_current_values = {f: ref.get(f) for f in dither_fields}
 
+        # Deterministic H5 measurements, computed once per record here.
+        reasoning = decision.get("decision_reasoning")
+        keyword_scan = detect_h5_keywords(reasoning)
+        value_echo = {f: classify_value_echo(dither_current_values[f], reasoning)
+                      for f in dither_fields}
+
         joined.append({
             "customer_id":           customer_id,
             "record_id":             record_id,
@@ -282,6 +300,9 @@ def load_condition(
             "stability_tier":        gt["stability_tier"],
             "decision_source":       gt["decision_source"],
             "drifted":               decision.get("business_decision") != gt["final_decision"],
+            "h5_keyword_detected":   keyword_scan["detected"],
+            "h5_keyword_patterns":   keyword_scan["matched_patterns"],
+            "value_echo":            value_echo,
         })
 
     if missing_decisions:
@@ -1619,3 +1640,150 @@ def detect_h5_keywords(text: str) -> Dict[str, Any]:
     matched = [p for p, compiled in zip(H5_KEYWORD_PATTERNS, _H5_COMPILED_PATTERNS)
                if compiled.search(text)]
     return {"detected": len(matched) > 0, "matched_patterns": matched}
+
+
+# ============================================================================
+# H5 — VALUE ECHO CHECK (deterministic: what the agent did to the number)
+# ============================================================================
+# Measures a fact about text, not a semantic judgment: given the value the
+# agent was SHOWN and the reasoning it wrote, did the text repeat the value,
+# repeat it with a unit marker added, convert it, or leave it out? Needs the
+# shown value, so it is deliberately NOT blind -- it answers "what did the
+# agent do to the number", separate from the blind LLM judge's "did it notice
+# or explain anything". Found necessary after two of three hand-labeled
+# "reformatted" cases turned out to be verbatim echoes of an engine-rescaled
+# value (shown 27.8 / 36.0, written 27.8 / 36.0).
+#
+# Descriptive by design: it reports observations and does not decide what
+# counts as abnormal. Whether a conversion or omission is notable depends on
+# the clean-baseline rate, which the analysis must compute (agents legitimately
+# say "4+ years" for 48 months and skip fields in clean data too).
+
+_NUM_RE = re.compile(
+    r"(?<![A-Za-z\d_.,])"
+    r"(?P<sign1>[-\u2212\u2013])?\s?\$?\s?(?P<sign2>[-\u2212\u2013])?"
+    r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?(?P<pct>%)?"
+)
+_UNIT_RE = re.compile(r"[\s-]*(years?|yrs?|months?|mos?|days?)\b", re.IGNORECASE)
+_UNIT_CANON = {"year": "years", "yr": "years", "month": "months", "mo": "months", "day": "days"}
+
+# Known scale/unit conversions to test when the shown value is absent.
+# Coincidental matches are possible (e.g. 0.36 x100 = 36 vs "36-day"); the
+# clean-baseline false-positive rate is the check on that, not this list.
+ECHO_SCALE_FACTORS = (("x100", 100.0), ("/100", 0.01), ("/12", 1.0 / 12), ("x12", 12.0))
+
+
+def _numeric_tokens(text: str) -> List[Dict[str, Any]]:
+    """Numbers in text with sign, written precision, and context flags.
+    A hyphen counts as a sign only when not glued to a preceding word or
+    digit ("tier-3" and "5-10" yield unsigned 3 / 10; "(-0.54)" yields -0.54).
+    Also captured, each from real agent text: a K suffix ("$8.5K"), a
+    trailing "+" meaning at-least ("47+ years"), the time unit word that
+    follows ("years"/"months"/"days"), and whether the number is half of a
+    ratio like "5/10" (an NPS score, not a measurement worth converting)."""
+    tokens = []
+    for m in _NUM_RE.finditer(text):
+        neg = bool(m.group("sign1") or m.group("sign2"))
+        frac = m.group("frac") or ""
+        digits = (m.group("int").replace(",", "") + frac[1:]).lstrip("0")
+        value = float(m.group("int").replace(",", "") + frac)
+        tail = text[m.end():]
+        ratio = (m.start() > 0 and text[m.start() - 1] == "/") or \
+                (tail[:1] == "/" and tail[1:2].isdigit())
+        scale, suffix = 1.0, ""
+        km = re.match(r"[kK]\b", tail)
+        if km:
+            scale, suffix, tail = 1000.0, "K", tail[km.end():]
+        plus = tail.startswith("+")
+        if plus:
+            tail = tail[1:]
+        um = _UNIT_RE.match(tail)
+        unit = _UNIT_CANON.get(um.group(1).lower().rstrip("s")) if um else None
+        value *= scale
+        tokens.append({
+            "value": -value if neg else value,
+            "decimals": max(len(frac) - 1, 0),
+            "sigdigits": len(digits),
+            "scale": scale,
+            "pct": bool(m.group("pct")),
+            "plus": plus,
+            "ratio": ratio,
+            "unit_after": unit,
+            "raw": m.group(0).strip() + suffix + ("+" if plus else ""),
+        })
+    return tokens
+
+
+def _token_matches(target: float, tok: Dict[str, Any], compare_abs: bool = False) -> bool:
+    """Exact match, or a rounding of the target at the precision the text
+    wrote (within half a unit of the last written digit). Rounded matches
+    need >= 2 significant digits so '0' or '0.2' cannot spuriously match 0.3.
+    A trailing '+' ("47+", "4+") matches anything in [value, value + 1 unit)."""
+    v = abs(tok["value"]) if compare_abs else tok["value"]
+    t = abs(target) if compare_abs else target
+    unit = 10 ** (-tok["decimals"]) * tok["scale"]
+    if tok["plus"]:
+        return v - 1e-9 <= t < v + unit
+    if abs(v - t) <= 1e-9 * max(1.0, abs(t)):
+        return True
+    return tok["sigdigits"] >= 2 and abs(v - t) <= 0.5 * unit + 1e-9
+
+
+def classify_value_echo(
+    shown_value: Any,
+    text: Optional[str],
+    factors: Tuple[Tuple[str, float], ...] = ECHO_SCALE_FACTORS,
+) -> Dict[str, Any]:
+    """
+    echo_class:
+      echo            shown value appears (signed, at the precision written)
+      echo_pct_marker same number appears only with a '%' attached (number
+                      preserved, percent asserted -- e.g. shown 24.9, wrote 24.9%)
+      converted       shown value absent, but shown x a known factor appears
+                      (reports the factor, and whether a % was attached)
+      magnitude_only  shown value negative; text has the number without its sign
+      omitted         none of the above
+      not_applicable  shown value is not a plain number (categorical, boolean)
+    low_specificity: matched token is an integer under 100 written without a
+    decimal, where coincidental matches with unrelated numbers are likely.
+    This is a "look at it" flag, not a verdict: on tenure, whole-number
+    years ("30 years") are genuine conversions and trip it routinely.
+    unit_after: the time unit word following the matched number, if any
+    ("years"/"months"/"days"). Splits a real unit change (570 -> "47.5 years")
+    from a rescale that kept the old label (810 -> "67.5 months").
+    Conversions skip ratio tokens such as the "10" in an NPS "5/10".
+    Priority is echo > echo_pct_marker > magnitude_only > converted > omitted.
+    """
+    result = {"echo_class": "omitted", "matched_text": None, "factor": None,
+              "pct_marker": False, "low_specificity": None, "unit_after": None}
+    if isinstance(shown_value, bool) or not isinstance(shown_value, (int, float)):
+        result["echo_class"] = "not_applicable"
+        return result
+    if not text:
+        return result
+
+    tokens = _numeric_tokens(text)
+
+    def _fill(tok, echo_class, factor=None):
+        result.update(echo_class=echo_class, matched_text=tok["raw"], factor=factor,
+                      pct_marker=tok["pct"], unit_after=tok["unit_after"],
+                      low_specificity=(tok["decimals"] == 0 and abs(tok["value"]) < 100))
+
+    hits = [t for t in tokens if _token_matches(float(shown_value), t)]
+    plain = [t for t in hits if not t["pct"]]
+    if plain:
+        _fill(plain[0], "echo"); return result
+    if hits:
+        _fill(hits[0], "echo_pct_marker"); return result
+
+    if shown_value < 0:
+        mag = [t for t in tokens if _token_matches(float(shown_value), t, compare_abs=True)]
+        if mag:
+            _fill(mag[0], "magnitude_only"); return result
+
+    for name, factor in factors:
+        conv = [t for t in tokens
+                if not t["ratio"] and _token_matches(float(shown_value) * factor, t)]
+        if conv:
+            _fill(conv[0], "converted", factor=name); return result
+    return result
