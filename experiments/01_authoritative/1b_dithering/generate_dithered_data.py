@@ -358,7 +358,7 @@ def generate_all_conditions(
     allow_invalid: bool = False,
 ) -> None:
     """
-    Generate agent input + reference files for all 50 unconditional H1,
+    Generate agent input + reference files for all 55 unconditional H1,
     H2, H3, H4, H7, H8a dither conditions. If only_condition is specified,
     regenerate just that one condition (useful for debugging without
     regenerating all 50).
@@ -375,7 +375,7 @@ def generate_all_conditions(
     h1_category_purchase_behavior, h1_category_risk_factors, and
     h8a_pair2_purchase_risk must all have been run through the agent
     first). See check_and_generate_h8b.py, run after the agent has
-    processed all 50 conditions here.
+    processed all 55 conditions here.
     """
     print(f"\n{'='*60}")
     print("STEP 3: Dither Conditions")

@@ -787,10 +787,10 @@ engine output (clean record vs. dithered record, field by field):
 3. The three H4 fields differ in propagated vs. isolated corruption. State
    this in the design section of any write-up; per-field reporting (already
    planned) is the right unit.
-4. **Option, not decided:** churn plausible/implausible with
+4. **Decided and built:** churn plausible/implausible with
    recompute_derived=False (2 conditions, about 2,000 calls, roughly $5)
-   would turn the redundancy hypothesis from an observation into a
-   manipulated test.
+   turns the redundancy hypothesis from an observation into a manipulated
+   test. See "Isolated-corruption arm: built" below.
 
 **Redundancy table (to build):** columns = dithered field, redundant
 siblings present in the record, propagated by the engine (yes/no). Derive it
@@ -843,3 +843,33 @@ happened to produce detections; that would be circular.
    not show that a classifier is required or sufficient: the judge gave
    three different labels to three near-identical phrasings, so claim only
    the negative result.
+
+## Isolated-corruption arm: built (2 conditions; H4 now 8, total 55)
+
+`h4_churn_risk_score_plausible_isolated` and
+`h4_churn_risk_score_implausible_isolated` in dither_engine.py, with
+recompute_derived=False and the SAME seeds as their propagating
+counterparts. Verified at n=60 with all 55 conditions regenerated:
+- the validity check passes for both;
+- the matched pair gets the identical corrupted value and operator in
+  60/60 records each, with no field other than is_at_risk differing;
+- the isolated arm keeps the ORIGINAL is_at_risk in 60/60;
+- the flag differs between arms in 32/60 (plausible) and 25/60
+  (implausible): the contradiction-carrying records, matching the counts
+  found earlier. In the other records the two arms' inputs are identical,
+  a built-in negative control for agent run-to-run noise;
+- regression: all 106 files (dither_reference.json and agent_input.jsonl)
+  across the 53 original conditions are byte-identical to the
+  pre-change generation.
+
+Counts updated everywhere: 55 conditions (H4 = 8); generate_dithered_data.py
+said "50 unconditional", already stale before this change, now 55. Amendment
+updated (new subsection "Propagated vs. isolated corruption", condition
+table, call counts, cost: about 60,000-61,000 calls, $139-142 standard /
+$70-71 Batch before boundary expansion). Pre-specified analysis (paired
+McNemar's on drift and detection, split by contradiction-carrying vs.
+input-identical records) is written into the amendment.
+
+**Not yet built:** the evaluator side. evaluate_h4.py still loads the nine
+original conditions; the isolation analysis belongs with the
+garbage_filter_analysis() wiring.

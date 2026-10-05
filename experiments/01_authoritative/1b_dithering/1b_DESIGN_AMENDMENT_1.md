@@ -860,16 +860,70 @@ effect, matching the expected ~5% false-positive rate at α=0.05.
 **Consequence: per-field contrasts are H4's primary report whenever the
 gate fires; the pooled contrast is a footnote, not the headline.**
 
-### Condition set (6 total)
+### Propagated vs. isolated corruption (found after the first smoke runs)
+
+The engine's `recompute_derived` (default True) recomputes exactly two
+derived fields after dithering: `churn_risk_score` → `is_at_risk` (≥ 0.60)
+and `support_tickets_open` → `recently_contacted_support`. Verified against
+real engine output (clean record vs. dithered record, field by field, n=60):
+in the H4 churn conditions `is_at_risk` was changed in 25/60 (implausible)
+and 32/60 (plausible) records and agrees with the SHOWN, corrupted score in
+60/60 (with the original score in only 35/60). In the H4 spend and tenure
+conditions no field other than the targeted one changes, so
+`lifetime_value_estimate`, `account_created_date` and the rest keep their
+original values and contradict the corrupted figure.
+
+This matters for interpretation. The only two explicit detections in the
+first smoke run (n=30 per condition) both came from cross-checking a
+sibling field in the record (`total_spend` vs. `lifetime_value_estimate`;
+`tenure_months` vs. `account_created_date`), while the churn conditions
+produced none. That contrast is partly engine-made: churn's redundant
+sibling was made to AGREE with the corrupted value, the others were left
+contradicting it. It is therefore not independent evidence on whether
+detection tracks relational coherence or stated-range validation. A second
+confound is that a scale-swapped churn value (e.g. 24.9) can be read as a
+percentage. Churn drift in the propagated conditions also conflates the
+corrupted score with a changed flag that agents explicitly cite ("flagged
+as at-risk"). The three H4 fields therefore differ in whether corruption
+propagates, one more reason H4 is reported per field.
+
+**The isolated-corruption arm (2 conditions, recorded here as a design
+decision).** `h4_churn_risk_score_plausible_isolated` and
+`h4_churn_risk_score_implausible_isolated` repeat the churn arms with
+`recompute_derived=False`, so `is_at_risk` keeps its ORIGINAL value and
+contradicts the corrupted score wherever propagation would have flipped it.
+They deliberately reuse their propagating counterparts' seeds. Verified at
+n=60: every customer receives the identical corrupted value and operator in
+both arms (60/60 each), the isolated arm keeps the original flag in 60/60,
+and no other field differs between arms. The flag differs in 32/60
+(plausible) and 25/60 (implausible) records; those are the
+contradiction-carrying records. In the remaining records the two arms'
+inputs are IDENTICAL, so they act as a built-in negative control: any
+propagated-vs-isolated difference there is run-to-run agent noise.
+
+**Pre-specified analysis:** paired McNemar's, isolated vs. propagated, per
+plausibility level, on (a) decision drift and (b) explicit detection (the
+frozen keyword scan, and the judge's `explicit_concern` once validated),
+reported separately for the contradiction-carrying records and for the
+input-identical records. The redundancy hypothesis predicts higher
+detection in the isolated arm among contradiction-carrying records and no
+difference among input-identical ones. The drift direction is exploratory:
+more detection could lower drift, or detection could fail to protect (one
+stable customer in the first smoke run detected the problem and still
+drifted).
+
+### Condition set (8 total)
 
 `h4_churn_risk_score_plausible`, `h4_churn_risk_score_implausible`,
 `h4_total_spend_plausible`, `h4_total_spend_implausible`,
-`h4_tenure_months_plausible`, `h4_tenure_months_implausible`.
+`h4_tenure_months_plausible`, `h4_tenure_months_implausible`, plus the
+isolated-corruption arm `h4_churn_risk_score_plausible_isolated` and
+`h4_churn_risk_score_implausible_isolated`.
 
 Drift-type conditions for these three fields are served directly by H2's
 existing 15%-magnitude conditions (`h2_{field}_mag15pct`) — confirmed at
 build time these can be reused directly rather than regenerated, reducing
-H4 to 6 new conditions, not 9.
+H4 to 8 new conditions, not 11.
 
 ---
 
@@ -1281,16 +1335,16 @@ from the main pipeline, but does not belong in the core hypothesis set.
 | H1 | 7 | 14 |
 | H2 | 4 | 12 |
 | H3 | 8 | 15 |
-| H4 | 2 | 6 |
+| H4 | 2 | 8 |
 | H7 (new) | — | 4 |
 | H8a (new) | — | 2 |
 | H8b (new) | — | 0–1 (conditional) |
-| **Total** | **21** | **53-54** |
+| **Total** | **21** | **55-56** |
 
-(H1=14 + H2=12 + H3=15 + H4=6 + H7=4 + H8a=2 + H8b=0–1)
+(H1=14 + H2=12 + H3=15 + H4=8 + H7=4 + H8a=2 + H8b=0–1)
 
 
-At n=1,000 customers per condition: 53,000–54,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
+At n=1,000 customers per condition: 55,000–56,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
 
 Boundary expansion cost is a genuine open unknown, not a placeholder estimate. The mechanism now covers three tiers 
 (`deeply_boundary`, `lightly_boundary`, `tied_no_majority`, per the `aggregate_baseline.py` tied vote fix) with an adaptive 
@@ -1299,9 +1353,9 @@ not the earlier flat "minimum 25 runs" estimate this section previously cited. E
 combined boundary population turns out to be once the primary baseline actually runs. See `RESEARCH_NOTES.md`'s open 
 question tracking this same population split as a stochasticity finding in its own right.
 
-Total: roughly **58,000–59,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
+Total: roughly **60,000–61,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
 
-At 1a's observed per-record cost (~$0.00232/record): approximately **$135–137 at standard API pricing before boundary expansion, $67–68 with Batch API's 50% discount**.
+At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 at standard API pricing before boundary expansion, $70–71 with Batch API's 50% discount**.
 
 ---
 
@@ -1350,7 +1404,7 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$135–137 
   (avg_resolution_time_hours + refund_rate) added as a baseline comparison
   point. Full 2x2 directionality achieved for all three pairs (mostly free,
   reusing H1/H2 conditions); full factorial declined for the triplet.
-- **H4** restructured: 2 → 6 conditions. Reuses H2's field trio (resolving
+- **H4** restructured: 2 → 8 conditions. Reuses H2's field trio (resolving
   both the single-field problem and the churn_risk_score over-concentration
   concern), but the design went substantially further during a dedicated
   design session: expanded from one entry-error operator per field to a
@@ -1366,7 +1420,12 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$135–137 
   (`gee_style_plausibility_test()`, `gee_field_mechanism_interaction_gate()`
   — see Statistical Methodology note). Third dither type (human origin
   error, Fork B) considered, designed at a conceptual level, explicitly
-  deferred, unchanged from the original restructuring.
+  deferred, unchanged from the original restructuring. After the first
+  smoke runs, a design finding about derived fields (the engine propagates
+  churn corruption into `is_at_risk` but leaves spend and tenure siblings
+  contradicting the corrupted value) led to a two-condition
+  isolated-corruption arm for churn, a paired test of the redundancy
+  hypothesis (see "Propagated vs. isolated corruption").
 - **H5** fully specified: frozen 25-pattern regex keyword list (with
   "uncertain about" deliberately excluded), Jaccard secondary metric shared
   with H3, manual audit methodology for false negative rate estimation,
