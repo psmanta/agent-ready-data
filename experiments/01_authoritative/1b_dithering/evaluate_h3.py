@@ -198,7 +198,21 @@ def jaccard_coherence_analysis(
             if len(texts) < 2 or not r["dithered_reasoning"]:
                 continue
             d_score = mean_pairwise_jaccard(r["dithered_reasoning"], texts)
-            b_scores = [mean_pairwise_jaccard(t, [o for o in texts if o != t]) for t in texts]
+            # Exclude by POSITION, not by value -- found via H5's smoke test,
+            # 2026-08. If 2+ of a customer's matching baseline texts are
+            # byte-identical (a real, valid outcome at temperature=0, not
+            # an error), excluding by value ("!= t") removes every copy,
+            # not just the current one -- if ALL texts are identical, this
+            # leaves an empty comparison set for every single one, making
+            # mean_pairwise_jaccard return None for every element. The old
+            # check (`not b_scores`) tested whether the LIST was empty, not
+            # whether it was full of Nones -- a list of [None, None, None]
+            # is truthy, so execution continued straight into sum() on
+            # None values and crashed. Confirmed this is not a rare edge
+            # case: it fired in a real 30-customer smoke test.
+            b_scores = [mean_pairwise_jaccard(texts[i], texts[:i] + texts[i+1:])
+                       for i in range(len(texts))]
+            b_scores = [s for s in b_scores if s is not None]
             if d_score is None or not b_scores:
                 continue
             dithered_coh.append(d_score)
