@@ -1,0 +1,423 @@
+# H5 Working Document — Detection Awareness
+*(Working notes, in progress — captures design decisions locked so far, ahead of full amendment integration. Mirrors the pattern used for H4's working doc.)*
+
+## Hypothesis
+
+Does the agent's reasoning text show signs of noticing data quality
+problems — and when it does notice, does that awareness actually change
+its decision, or does it get silently overridden? Cross-cutting, not its
+own condition set: applies to `decision_reasoning` across every
+condition in the experiment (H1-H4, H7, H8a/b), not a dedicated dither
+arm.
+
+## Core design — already locked (from the original amendment, confirmed by direct re-read, not recalled)
+
+- **Primary metric:** a frozen, pre-registered regex keyword list
+  searching `decision_reasoning` for detection language. A second
+  evaluation agent ("LLM judge") was explicitly considered and rejected
+  as the primary mechanism — roughly doubles cost, introduces an
+  unauditable "who judges the judge" problem, for uncertain recall gains
+  over a well-built list.
+- **Manual audit, not a second automated system, as the error-correction
+  mechanism:** a random sample (~150-200) of zero-hit reasoning texts
+  reviewed by hand, producing an honest "estimated N% miss rate" —
+  `h5_blind_review.html`, already built, is this tool.
+- **Secondary metric:** Jaccard similarity against baseline reasoning —
+  shared machinery with H3, not a new metric.
+- **Reporting is a three-way cross-tab per condition, not a single
+  number:** detected+changed (genuine signal-linked detection),
+  detected+unchanged (noticed, didn't act), not detected (the blind
+  spot, matching 1a's original finding).
+- **"Uncertain about" deliberately excluded** from the frozen list —
+  object-ambiguous (could mean uncertain about the data or about the
+  decision itself), and decision-level uncertainty is already measured
+  directly via `agent_confidence` and H6's stability classification.
+
+## The frozen keyword list: a real gap found, and a design question resolved
+
+**A genuine, previously-unnoticed gap, found and fixed for free.** The
+amendment's own stated reason for choosing regex over plain string
+matching was explicitly to catch inflectional variants. Verified by
+direct testing that this promise wasn't actually delivered: seven
+adjective-based patterns across the plausibility/surprise and
+doubt/verification categories (`unusual`, `atypical`, `implausible`,
+`odd`, `strange`, `suspicious`, `questionable`) all FAIL to match their
+own adverb forms, since none include an `(?:ly)?` suffix option —
+confirmed with concrete sentences ("this value is unusually high" does
+not match `\bunusual\b`). **Fix, locked:** add the adverb-form suffix to
+all seven patterns (`unusual(?:ly)?`, `atypical(?:ly)?`,
+`implausib(?:le|ly)`, `odd(?:ly)?`, `strange(?:ly)?`,
+`suspicious(?:ly)?`, `questionable|questionably`). Zero cost, no
+tradeoff, not contingent on anything else in this document.
+
+**A genuinely new proposal considered: supplementing the frozen list
+with a zero-shot classifier pass, to catch organic paraphrasing the
+regex list structurally cannot ("An NPS of 85 exceeds the standard
+scale" contains no frozen-list pattern at all).** Named explicitly as
+reopening an already-decided question, not a new one: a zero-shot
+classifier IS the "second evaluation agent" the amendment already
+considered and rejected, under a different name — same mechanism (an
+LLM call judging the reasoning text), same underlying tradeoffs.
+
+**The diagnosis is correct, and the existing design already half-agrees
+with it** — the manual audit exists specifically because paraphrased
+misses were anticipated. The real, previously-unstated gap: the audit
+only produces an aggregate "~N% miss rate" caveat, it never corrects the
+per-condition cross-tab itself, which is built entirely from the raw
+(known-imperfect) keyword list.
+
+**Cost analysis, done with real numbers rather than waved at:**
+scoping a classifier pass to "zero-hit texts only" does not obviously
+save much, since the zero-hit fraction is unknown until real H5 data
+exists — if detection is rare (plausible), zero-hit texts could be 80%+
+of the ~50,000-record experiment, meaning "classifier on zero-hit only"
+and "classifier on everything" cost roughly the same. Rough order of
+magnitude at an 80% zero-hit rate: ~40,000 additional calls, roughly $90
+additional at standard pricing, $45 with Batch — not double the budget,
+but not negligible, and entirely dependent on a number we don't have
+yet.
+
+**This project is self-funded, not sponsored, and that specifically
+shapes the cost posture here** — tempting as it might be to use a
+company-sponsored key to be exhaustive, doing so would quietly undercut
+the "independent, personally-funded research" framing that gives the
+whole project its credibility. This isn't just general frugality; it's
+a standing constraint on every cost decision going forward, not unique
+to H5.
+
+**The circularity problem — "who audits the classifier" — doesn't need
+a new mechanism, since one already exists for exactly this job.**
+`h5_blind_review.html` gets pointed at a sample of the classifier's OWN
+calls (its positives, and especially its disagreements with the keyword
+list) instead of just the keyword list's zero-hits, producing an honest
+accuracy estimate for the classifier the same way the keyword list's was
+always going to get one.
+
+**Locked sequencing — same "lock the decision rule, defer the exact
+commitment until real numbers exist" pattern as H8b and
+boundary-expansion's population size:**
+1. Fix the adverb-form gap in the frozen list now (free, done above).
+2. Keep the frozen list as the primary, deterministic, zero-marginal-
+   cost metric, unchanged.
+3. Build the classifier pass, but validate it FIRST against the
+   existing ~150-200 manual-audit sample — get a real accuracy estimate
+   AND a real zero-hit volume number from actual data before committing
+   further spend.
+4. With real numbers in hand, decide whether to scale the classifier to
+   every zero-hit text experiment-wide. Report both the raw keyword
+   rate and the classifier-corrected rate together — the gap between
+   them IS the finding (deterministic monitoring undercounts real model
+   awareness), not a flaw to paper over.
+
+**Not yet decided:** the exact zero-shot classifier prompt wording
+(a draft was floated: "Does this reasoning text explicitly question the
+validity or plausibility of an input value?" — not yet stress-tested the
+way the frozen list's own wording was).
+
+## Jaccard baseline and "reasoning inertia" — mostly already built, one genuinely new lens added
+
+**The "clean-vs-clean noise floor" concern is real, and the machinery
+already exists, at zero additional cost.** Every customer already
+receives 5 baseline runs (not 2) as part of the core 1b pipeline,
+generated regardless of H5's needs. From those 5 runs,
+`C(5,2) = 10` pairwise Jaccard scores among a customer's own baseline
+texts ARE the clean-vs-clean jitter distribution — built with more
+statistical power than a two-run design would give, fully paid for
+already.
+
+**The population-level comparison this enables is also already built
+and verified.** `jaccard_condition_level_shift()` tests whether a
+condition's dithered-vs-baseline coherence differs from the baseline's
+own self-similarity, via Wilcoxon signed-rank on the paired per-customer
+difference — exactly "is a dithered score flat relative to the clean
+noise floor," at the condition level. Verified with planted-null and
+planted-degradation scenarios when originally built for H3.
+
+**Genuinely new: "reasoning inertia" — a per-customer cross-tab, not a
+population statistic.** The Wilcoxon test answers whether coherence
+shifts ON AVERAGE across a condition; it does not surface the specific,
+nameable case of a customer whose dithered reasoning stays
+structurally similar to baseline WHILE their decision flips anyway — a
+few such cases could wash out entirely in a population median and never
+get reported on their own terms.
+
+**Operational definition, locked:** a per-customer DESCRIPTIVE flag
+(not a formal per-customer significance test — 10 baseline-pair data
+points per customer isn't enough statistical power for that, which is
+exactly why the Wilcoxon test operates at the condition level instead).
+A customer's dithered-vs-baseline coherence score is flagged "flat" if
+it falls within the observed range of their own 10 baseline
+self-similarity scores. Cross-tabbed against drift status: "reasoning
+inertia" = flat coherence AND decision flipped. Reported as a count,
+clearly disclosed as a threshold-based flag, not a hypothesis test.
+
+**Cost: zero.** Both the baseline noise floor and the condition-level
+shift test were already fully paid for by the core pipeline (5 baseline
+runs) and already-built code (`jaccard_condition_level_shift()`). The
+reasoning-inertia cross-tab adds no new API calls — only new code
+operating on data already in memory once H3's and H5's main analyses
+run.
+
+## Remaining open questions (next to resolve)
+
+This document is being built incrementally as design concerns get
+raised and resolved, matching the pattern that worked well for H4 —
+expect more entries as the review continues.
+
+1. **Zero-shot classifier prompt wording** — not yet locked or
+   stress-tested.
+2. **Architecture question flagged but not yet resolved:** since H5 is
+   cross-cutting, does the keyword/Jaccard/inertia scanning live in
+   `evaluate_core.py` as primitives each hypothesis's own evaluator
+   calls (requiring a retrofit of H1-H3's already-built evaluators), or
+   does `evaluate_h5.py` do an independent pass over every condition?
+   Leaning toward the former (avoids re-loading 50+ conditions' worth of
+   data a second time, matches the project's established "reusable
+   things live in core" pattern) but not yet decided with Peter.
+3. **Whatever the next concern is** — Peter flagged there's at least one
+   more cost-related issue to discuss before this design is fully
+   settled.
+
+## Smoke test results: n=19 qualifying customers, strong signal, one taxonomy correction
+
+Ran the Case B/C smoke test at n=30 across all 3 H4 implausible fields
+(churn_risk_score, total_spend, tenure_months) with the real agent. All
+19 customers who drifted with zero keyword hits showed LOW Jaccard
+relative to their own baseline wobble — not a single flat/Case C result
+by the original binary definition. The effect size is not marginal: even
+the least extreme case (CUST_000007, 0.502) sits well below its own
+baseline floor (0.848).
+
+**Two reproducible confabulation patterns found by reading the actual
+text, worth quoting directly in any eventual write-up:**
+- **Absurd tenure reframed as impressive loyalty, not flagged as
+  broken.** CUST_000011 (1,620 months / 135 years): *"a long-tenured
+  customer (1620 months)."* CUST_000007 (570 months / 47.5 years):
+  *"a long-tenured customer (47.5 years)."* Same template, two
+  different customers, the impossible number slotted straight into a
+  pre-existing "loyalty" frame.
+- **Negative churn risk reframed as safety, not impossibility.**
+  CUST_000024: *"her negative churn risk score (-0.54)... indicate she
+  is stable."* CUST_000026: *"her churn risk score is negative
+  (favorable)."* Two separate customers, same invented logic: negative
+  isn't broken, it's better-than-zero.
+
+**A genuine three-way split found on closer reading, not a clean
+binary — the original Case B/C framing was too coarse.** A subset of
+the "LOW Jaccard" bucket (CUST_000009, 000022, 000003 — all scale-swap
+corruptions on `churn_risk_score`, e.g. 0.249 → 24.9) shows a distinct
+pattern from the confabulation cases above: the agent's SEVERITY
+DESCRIPTOR stays identical across baseline and dithered text ("moderate
+churn risk" in both), even though the number's apparent magnitude
+changed by two orders. No narrative is invented to explain why 24.9
+makes sense — the model just re-labels it (adds a `%`) and its judgment
+doesn't move. Proposed name: **scale-insensitive absorption** — not
+pure Case C (the model does engage with the number by reformatting it),
+not Case B (nothing is confabulated), a genuinely distinct third
+failure mode.
+
+**A mechanism claim checked and corrected before it got written down
+wrong.** The original hypothesis was that clause reordering explains
+the Jaccard drop in the scale-insensitive cases. Verified directly:
+Jaccard is a set-overlap metric, completely blind to word order by
+construction — reordering identical vocabulary gives Jaccard=1.0,
+confirmed by direct test. The actual driver is paraphrasing with
+DIFFERENT vocabulary while covering similar factual ground (e.g.
+"flagged as at-risk," "active problems requiring immediate attention,"
+and "worth retaining" all appear only in the dithered text, replacing
+different phrasing for similar facts in the baseline) — not reordering.
+
+**Worth naming precisely: `churn_risk_score` has an explicitly stated
+0.0-1.0 range in the prompt, so a value of 24.9 violates a rule the
+agent was actually told, same as the confabulation cases.**
+"Scale-insensitive absorption" is not a milder failure than
+confabulation — it's a different flavor of the same underlying garbage-
+filter failure, not a case where the agent had no way to know.
+
+**Proposed addition, locked in concept, to be checked against full-scale
+data before any classifier spend:** a free, deterministic
+severity-descriptor match — does the same qualitative word (low,
+moderate, high, significant, critical, etc.) appear in both a
+customer's baseline and dithered reasoning. If this cleanly separates
+confabulation from scale-insensitive absorption at full scale, that's a
+SECOND zero-cost signal (alongside the keyword list and baseline-Jaccard
+machinery), and the classifier's case gets weaker, not stronger. If it
+doesn't separate cleanly, that's real evidence the classifier earns its
+cost — same "prove the cheap tool insufficient first" sequencing already
+locked for the garbage-filter/classifier decision above. Not yet built
+or tested at scale; this is a hypothesis from n=19, not a confirmed
+distinguishing rule.
+
+**Honest limit, unchanged:** n=19 is a strong, consistent pattern, not
+noise — the effect size is too large and too uniform to be a sampling
+artifact. It cannot yet establish whether true Case C (complete silence,
+no engagement with the anomaly at all) exists in this data or is simply
+rare enough not to appear in 19 cases. That's a question only the
+full-scale run can answer.
+
+## Severity-descriptor check: tested properly, failed for a precise reason — classifier now earns its cost
+
+**Tested at full scale (n=19) with correct methodology** (baseline
+internal consensus checked first, same noise-floor principle as the
+Jaccard baseline, operating directly on real files rather than retyped
+chat text after an earlier manual-transcription attempt introduced a
+real error worth noting: a hand-copied test snippet was accidentally
+truncated, producing an apparent false negative that was actually a
+transcription mistake, not a finding — corrected by rebuilding the
+check to run directly against the real JSON files).
+
+**Result: does not cleanly separate the two failure modes.** 15/19
+customers showed "overlaps baseline consensus," including 4 of the 5
+customers we were most confident were genuine confabulation by manual
+reading (CUST_000010, 007, 011, and notably CUST_000024 — the "negative
+churn risk... indicates she is stable" example). Only CUST_000026
+correctly showed no overlap. This is the opposite of the hypothesis's
+prediction for our sharpest examples.
+
+**Root cause, verified concretely, not assumed:** business-decision text
+reuses the same small set of severity-flavored words (low / moderate /
+high / significant, etc.) across several INDEPENDENT judgments in the
+same paragraph — customer value tier, urgency framing, and the specific
+risk score — and naive whole-text set matching cannot tell them apart.
+CUST_000024's actual dithered text: *"a low-value customer... her
+negative churn risk score (-0.54) and low fraud risk (0.135) indicate
+she is stable."* The word "low" is present and overlaps the baseline's
+vocabulary, but it's describing value tier and fraud risk, not churn
+risk severity — there is no severity word actually describing churn
+risk in that sentence at all.
+
+**A second, stronger free attempt was also tried and also failed, for a
+precise and informative reason.** A windowed/proximity version (severity
+words within 8 words of the specific field's own mention, e.g. "churn
+risk") was tested against the same CUST_000024 text. It STILL caught
+"low," because "low fraud risk" sits only 3 words from "churn risk
+score" in the actual sentence. This is not a tuning failure (a
+differently-sized window wouldn't fix it) — it's that this kind of text
+routinely discusses multiple distinct numeric fields in tight textual
+proximity within one sentence, and no fixed word-distance rule can
+determine which noun phrase a given adjective is actually modifying.
+That is a syntactic disambiguation problem, which is exactly the kind of
+task a language model handles natively and a word-proximity heuristic
+structurally cannot.
+
+**Conclusion: the classifier's cost is now earned, not assumed.** Two
+deterministic approaches were tried in good faith, both failed on the
+same concrete, verified example, for a principled and explainable
+reason rather than bad luck or insufficient tuning. This is precisely
+the evidence threshold the locked sequencing (see "The frozen keyword
+list" section above) required before committing to classifier spend.
+**Next step: build the classifier prompt and validate it against the
+existing ~150-200 manual-audit sample (step 3 of that sequencing),
+before any decision about running it at full experiment scale.**
+
+## Classifier proof-of-concept: 3/7 raw match, but not a uniform failure
+
+Ran the classifier against all 3 real implausible conditions (90 records,
+~$0.09 total) and compared against the 7 customers we'd manually labeled.
+Raw result: 3/7 match. Read individually rather than trusted as an
+aggregate, the four mismatches are NOT the same kind of failure:
+
+- **CUST_000026 (negative churn risk called "favorable") — a genuine,
+  concerning classifier miss.** The classifier called this "a standard
+  interpretation" and classified it `plain_restatement`. There is no
+  standard business sense in which negative risk means "favorable" --
+  this is the sharpest confabulation example in the dataset, and the
+  classifier took the invented claim at face value rather than
+  recognizing it as invented. Worth treating as a real finding about the
+  classifier's own susceptibility to a convincing-sounding confabulation,
+  not just a labeling slip.
+
+- **CUST_000022 (churn risk "36.0", no visible format marker) — not a
+  classifier error; reveals a structural limit of text-only blind
+  classification.** Compare to CUST_000009, which the classifier got
+  right: that text explicitly writes "24.9%", and the `%` sign is what
+  makes the reformatting legible from the text alone. "36.0" carries no
+  such marker. We only know it's reformatted because we have the
+  dithering mechanism and the true original value -- information the
+  classifier is deliberately never given. Category 3 is only detectable
+  from text alone when the reformatting leaves a visible trace; when it
+  doesn't, Category 3 and Category 4 are genuinely indistinguishable to
+  any blind reader, human or model. Not fixable by prompt iteration or a
+  stronger model -- an honest limit of the measurement approach, to be
+  documented rather than chased.
+
+- **CUST_000010 (negative spend explained as "refund/credit issues...
+  warrant investigation") — a real prompt ambiguity.** Sits on the
+  boundary between Category 1 (doubting the figure's validity) and
+  Category 2 (inventing a specific story that happens to end in a call
+  for follow-up). The current Category 1 wording doesn't distinguish
+  "doubting whether the number is correct" from "flagging an invented
+  situation as needing attention." Needs the same kind of explicit
+  boundary clarification as the earlier unit-conversion fix.
+
+- **CUST_000003 (moderate churn risk used alongside other factors to
+  justify intervention) — Category 2 is currently too broad.** The
+  classifier's logic -- a number used as one factor in a multi-factor
+  justification counts as "reframing" -- would make nearly ALL ordinary
+  business reasoning qualify, since using numbers to support conclusions
+  is what this text always does. Category 2 needs to require that the
+  EXPLANATION ITSELF asserts something non-standard about what the
+  figure means (e.g. "negative = favorable"), not merely that the figure
+  was used to help justify a decision.
+
+**Consequence for the model-choice question:** none of these four
+mismatches look like a capability gap a stronger model would obviously
+fix. CUST_000022 would fail identically under any model, since the
+needed information isn't recoverable from the text at all. The other
+three are prompt-precision issues that would affect any model run
+against this exact prompt. Testing a second model now would mostly
+measure the same prompt ambiguities twice, not model capability.
+**Decision: fix the two real prompt issues (Category 1/2 boundary,
+Category 2 narrowing) first, then rerun before any model comparison is
+informative.**
+
+## Classifier prompt development: paused by design, not abandoned — a real structural limit found
+
+Three iterations run against the same 7 manually-labeled examples (v1:
+3/7; v1 with two targeted fixes: 3/7 but with a genuine regression
+traded for a genuine fix; v2, restructured from a sequential tree to
+two independent questions: 3/7 again, but with the most concerning
+persistent failure, CUST_000026's "negative=favorable," finally
+resolved).
+
+**Stopped here deliberately, for overfitting risk, not because the
+number looks bad.** Three rounds of tuning against the same 7 hand-
+picked examples is enough -- further iteration against this tiny,
+non-independent set risks crafting something that fits these specific
+texts without actually generalizing. The real test is the human-audited
+sample, which hasn't been touched yet.
+
+**What's now well-supported, not just hoped:** the classifier reliably
+catches genuine confabulation (Category 1/2 territory) across every
+version tested -- CUST_000024, CUST_000026, CUST_000010, and (in the
+unlabeled set) CUST_000011 and CUST_000018 all correctly resolve to
+narrative_reframing, each with a rationale that names the actual
+invented logic rather than a generic justification.
+
+**What's now confirmed as a genuine structural limit, not a prompt
+defect to keep chasing:** the Category 3 (reformatted-not-reexamined)
+vs. Category 4 (plain-restatement) boundary requires knowing what
+format is NORMAL for a given field in this specific system --
+information a blind classifier cannot have without being told the very
+thing we're withholding. CUST_000009's final-round rationale makes this
+explicit: it concluded "percentage form is standard for churn risk
+scores" -- a reasonable guess from general world knowledge that happens
+to be wrong for this dataset's actual convention (decimal is standard
+here). This isn't a missed visual cue (a % sign); it's the classifier
+correctly reasoning from incomplete information and landing on the
+wrong convention. CUST_000007's flip to incorrect this round is the
+mirror case: failing to recognize 47.5 years as an implausible tenure
+value, treating it as a plausible magnitude needing no special
+interpretation.
+
+**Conclusion carried forward:** Categories 1 and 2 (explicit concern,
+narrative reframing/confabulation) appear to be the classifier's real
+strength and the most decision-relevant categories for H4's garbage-
+filter question anyway -- they're what distinguishes "the agent noticed
+and said so" from "the agent invented a story to explain away the
+anomaly." The 3-vs-4 boundary may need a different approach entirely
+(possibly telling the classifier the field's normal range, which
+trades blindness for resolving power -- an open design question, not
+decided here) or may simply need to be reported with this limitation
+explicitly disclosed rather than solved. Revisit when returning to this
+thread; not resolved further tonight per the overfitting-risk call.

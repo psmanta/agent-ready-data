@@ -46,6 +46,7 @@ This module does three distinct jobs:
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1555,3 +1556,66 @@ def gee_field_mechanism_interaction_gate(
             "as the headline finding."
         ),
     }
+
+
+# ============================================================================
+# H5 — FROZEN DETECTION KEYWORD LIST (25 patterns, adverb-form gap fixed)
+# ============================================================================
+# Patterns locked in 1b_DESIGN_AMENDMENT_1.md. The adverb-form gap (e.g.
+# "unusually" not matching \bunusual\b) was found and fixed during the H5
+# design review -- the original patterns promised to close inflectional
+# gaps via regex but seven adjective patterns didn't actually include an
+# adverb suffix. Verified against concrete sentences before being locked
+# here, not assumed correct.
+
+H5_KEYWORD_PATTERNS = [
+    # Direct inconsistency language
+    r"\binconsisten(?:t|cy|cies)\b",
+    r"\bdoes(?:n't| not) match\b",
+    r"\bcontradict(?:s|ion|ing|ed)?\b",
+    r"\bconflict(?:s|ing)?\b",
+    # Plausibility/surprise language (adverb forms added)
+    r"\bunusual(?:ly)?\b",
+    r"\batypical(?:ly)?\b",
+    r"\bimplausib(?:le|ly)\b",
+    r"\bseems? off\b",
+    r"\bdoes(?:n't| not) add up\b",
+    r"\bodd(?:ly)?\b",
+    r"\bstrange(?:ly)?\b",
+    r"\bsurpris(?:ing|e|ed|ingly)\b",
+    r"\banomal(?:y|ies|ous|ously)\b",
+    # Doubt/verification language (adverb forms added)
+    r"\b(?:hard|difficult) to reconcile\b",
+    r"\bquestionable|questionably\b",
+    r"\bsuspicious(?:ly)?\b",
+    r"\bseems? wrong\b",
+    r"\bappears? incorrect\b",
+    r"\bmay be (?:an )?error\b",
+    r"\b(?:possible|likely|apparent) error\b",
+    r"\bdata error\b",
+    r"\bmistake in (?:the )?data\b",
+    # Explicit data-quality language
+    r"\bdata quality\b",
+    r"\bdata issue\b",
+    r"\bdata problem\b",
+]
+_H5_COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in H5_KEYWORD_PATTERNS]
+
+
+def detect_h5_keywords(text: str) -> Dict[str, Any]:
+    """
+    Scans decision_reasoning for the frozen 25-pattern detection keyword
+    list. Deterministic, auditable, zero marginal cost -- the primary H5
+    metric, per 1b_DESIGN_AMENDMENT_1.md. "Uncertain about" deliberately
+    excluded (object-ambiguous; decision-level uncertainty is already
+    measured directly via agent_confidence).
+
+    Returns detected (bool) and matched_patterns (which specific patterns
+    fired, for transparency/debugging -- not meant to be over-interpreted
+    per-pattern, since the list is reported as one pooled metric).
+    """
+    if not text:
+        return {"detected": False, "matched_patterns": []}
+    matched = [p for p, compiled in zip(H5_KEYWORD_PATTERNS, _H5_COMPILED_PATTERNS)
+               if compiled.search(text)]
+    return {"detected": len(matched) > 0, "matched_patterns": matched}
