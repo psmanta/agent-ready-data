@@ -421,3 +421,247 @@ trades blindness for resolving power -- an open design question, not
 decided here) or may simply need to be reported with this limitation
 explicitly disclosed rather than solved. Revisit when returning to this
 thread; not resolved further tonight per the overfitting-risk call.
+
+## Correction: two of three "reformatted_not_reexamined" labels were engine-side, not agent-side
+
+**Checked directly against dither_reference.json (value the agent was
+shown) versus the reasoning text it wrote.** The earlier taxonomy
+conflated what the dither engine did to a value with what the agent did
+with it. We labeled by knowing the engine's rescaling; the classifier,
+correctly, could only see the text.
+
+- CUST_000003: shown 27.8 (original 0.278); text says "27.8". Verbatim
+  echo of the corrupted value. No agent-side reformatting.
+- CUST_000022: shown 36.0 (original 0.36); text says "36.0". Echo.
+- CUST_000009: shown 24.9 (original 0.249); text says "24.9%". The
+  agent appended a `%`. The only genuine agent-side reformatting of
+  the three.
+- CUST_000007: shown 570 (original 19); text says "47.5 years" and
+  "long-tenured". Agent converted months to years AND attached an
+  evaluative label. narrative_reframing label stands.
+
+**Corrected labels:** 003 and 022 are plain_restatement. Re-scored
+against the three classifier runs already completed: v1 4/7, v1 with
+two fixes 5/7, v2 4/7 (previously 3/3/3 under the original labels).
+These tallies are NOT validation: the relabeling was proposed after
+seeing classifier outputs, on the same 7 examples used for tuning, and
+differences of 4 vs 5 vs 4 at n=7 are noise. The relabeling itself
+rests on a fact from the data (shown value vs written text), not on
+classifier behavior.
+
+**Consequences for earlier claims in this document:**
+- The "regression" diagnosed in the second run (spillover from the
+  Category 2 fixes into Category 3) was partly an artifact of the
+  mislabeling: 003 and 022 moving to plain_restatement was correct
+  movement. The v2 restructure was partly motivated by that reading;
+  it still fixed CUST_000026, but the spillover explanation is
+  overstated.
+- "Scale-insensitive absorption" as described above (agent "re-labels"
+  the number with a `%`) is accurate only for CUST_000009. For 003 and
+  022 the agent echoed an out-of-range value verbatim while still rating
+  it "moderate", which is consistent with silently treating it as a
+  percentage, with no trace in the text. That is an inference from the
+  severity word, not an observation.
+- Remaining real misses depend on knowing a field's normal format or
+  range (009: `%` is unremarkable without knowing decimals are the
+  norm; 007: 47.5 years is unremarkable without knowing tenure is
+  normally under ten years). CUST_000003's narrative_reframing call in
+  v2 is a genuine over-call of ordinary multi-factor reasoning.
+
+**Open, pending decision (not resolved here):** (1) merge Categories 3
+and 4 into one "unremarked" category, since genuine agent-side
+reformatting is rare in this data and not blind-detectable; (2)
+whether agent-side reformatting is better measured deterministically
+by comparing numbers in the text against the known shown value
+(echo vs. converted form), a data-aware check that measures what the
+agent did to the number rather than whether it noticed anything.
+
+## Decisions locked: three-category judge, deterministic echo check, architecture
+
+Agreed after the correction above:
+1. **The LLM judge merges Categories 3 and 4 into `unremarked_usage`.**
+   Final categories: `explicit_concern`, `narrative_reframing`,
+   `unremarked_usage`. A blind judge cannot reliably tell "reformatted
+   without comment" from "plain restatement" because that needs the
+   field's normal format, which it is deliberately not given. Prompt
+   rewrite NOT yet done; the judge prompt text must stay generic (no
+   examples drawn from our own findings, no hypothesis vocabulary such
+   as "explain away the anomaly").
+2. **What the agent did to the number is measured deterministically.**
+   `classify_value_echo()` in evaluate_core.py compares the value the
+   agent was shown (dither_reference.json) against its reasoning text.
+   Classes: echo, echo_pct_marker (same number, % attached), converted
+   (with factor and the unit word that follows), magnitude_only (sign
+   dropped), omitted. Descriptive only; "notable" is defined relative to
+   the clean-baseline rate. Not blind by design: it measures what
+   happened to the number, not whether the agent noticed anything.
+3. **Architecture:** primitives live in evaluate_core.py; the
+   deterministic H5 fields (keyword hit, echo class, mention flag) are to
+   be computed inside load_condition() so H1-H4 get them without a retrofit
+   or a second pass over the JSON; the LLM judge stays a separate script
+   whose output joins by id; evaluate_h5.py aggregates. WIRED (see below).
+   Caveat: the keyword scan hits anywhere in the text and cannot say which
+   field was doubted, so it is a coarse proxy for H4's field-specific
+   question; the judge is what attributes detection to a field.
+
+## Echo check: results (n=30 dithered customers x 3 H4 implausible conditions, Haiku 4.5, temp 0)
+
+Built and tested (31 original cases, then 17 more from real agent text),
+then refined after reading real output: unit-word capture, ratio tokens
+like NPS "5/10" skipped in conversion tests, "47+" read as at-least,
+"$8.5K" notation. One refinement unmasked a case: CUST_000009's real
+"87.5 months" had been hidden behind a false conversion match on the "10"
+in "5/10", caught first. Hand-checked cases (003, 022, 009, 007) all agree
+with the instrument.
+
+| Condition | echo | echo + % | converted | omitted |
+|---|---|---|---|---|
+| churn, dithered (n=30) | 10 | 11 | 0 | 9 |
+| churn, clean (150 runs) | 135 | 0 | 0 | 15 |
+| spend, dithered (n=30) | 18 | 0 | 1 | 11 |
+| spend, clean (150 runs) | 92 | 0 | 0 | 58 |
+| tenure, dithered (n=30) | 4 | 0 | 11 | 15 |
+| tenure, clean (150 runs) | 52 | 0 | 10 | 88 |
+
+Wilson 95% intervals on the dithered rates are wide at n=30 (e.g. 37%
+converted on tenure: 22-54%). The clean floor is 5 correlated runs per
+customer: point estimates only.
+
+**Findings, with the strength each one actually has:**
+- **Churn: agents add a % sign to the corrupted value in 11/30 (37%)
+  versus 0/150 clean runs.** Same customers, paired: exact McNemar
+  p = 0.001. This corrects an earlier statement in this document that
+  agent-side reformatting was rare; that statement rested on only the
+  three hand-labeled cases. No agent wrote the value back on the 0-1
+  scale (converted = 0), so none visibly self-corrected.
+- **Tenure: 11/30 converted, in two different ways.** Six wrote a real
+  unit change (e.g. shown 570 -> "47.5 years"). Five divided by 12 but
+  KEPT the "months" label (shown 540/780/810/930/1050 -> "45", "65",
+  "67.5", "77.5", "87.5 months"). The clean baseline has ten
+  conversions, all /12 with "years" and none with "months". Same
+  customers, 5 vs 0: exact McNemar p = 0.0625 -- suggestive, NOT
+  significant at n=30. The two with a .5 decimal cannot be coincidence.
+  Interpretation is open: the numbers match shown/12 exactly with a
+  months label, but intent is unobserved (a rescale into a believable
+  range versus a unit-label slip).
+- **Omission is elevated only for churn (30% vs 10% clean);** spend (37%
+  vs 39%) and tenure (50% vs 59%) show no difference. Suggestive; needs
+  crossing with drift before calling it filtering.
+- **Spend: 1/30 shown $500,255.00 and wrote "$5,002.55"**, exactly
+  shown/100 to the cent. Verified since (see "Pending checks resolved"): no other input field
+  carries 5002.55, so the agent derived it from the shown value.
+- **Hypothesis from the tenure table, not a finding:** years-labeled
+  cases were shown 150-630 and months-labeled cases 540-1050 -- larger
+  values leaning toward the kept-months label, with overlap. Needs a
+  dose-response look at n=1000.
+
+**Pending checks:** both resolved, see "Pending checks resolved" below.
+
+**Caveats:** one model and temperature; clean floor runs not independent;
+the `low_specificity` flag over-warns on tenure (whole-number years are
+genuine conversions: 3 of the 6 real unit changes tripped it) so it is a
+"look at it" flag, not a verdict.
+
+**Why this matters beyond itself (hypothesis for the full run):** H4's
+garbage-filter pattern (lower drift on implausible than plausible values)
+has two candidate mechanisms the drift rate cannot separate: the agent
+notices and discounts the value, or it silently rescales it into a
+believable range. Crossing echo class with whether the decision drifted
+distinguishes them. At n=30 this cross is too small to read; at n=1000 it
+is the main payoff.
+
+**Open:** rewrite the judge prompt for three categories; run the echo x drift cross-tab on the full
+run.
+
+## Wired into load_condition()
+
+load_condition() now adds three keys to every joined record:
+`h5_keyword_detected` (bool), `h5_keyword_patterns` (list), and
+`value_echo` (dict: dithered field -> classify_value_echo result), so
+H1-H4, H7 and H8 get the deterministic H5 measurements with no retrofit
+and no second pass over the JSON.
+
+**Verified before wiring, because every evaluator depends on this
+function:**
+- The "shown value" assumption: dither_reference.json's value equals
+  agent_input.jsonl's value for all 6,859 dithered (record, field) pairs
+  across all 53 conditions (n=60, 25 distinct fields): 0 mismatches.
+- Every old key is byte-identical in the new output across 3,180
+  records; new keys present everywhere; non-numeric fields correctly
+  `not_applicable`.
+- Semantic check: all 687 records citing the shown value of their first
+  dithered field classify as `echo`.
+- Evaluator regression: evaluate_h1, h2, h3 and h4 run against the old and
+  new evaluate_core on identical data produce byte-identical results, and
+  h4 passes validate_h4_schema.py.
+
+Limits to carry forward: the keyword scan is anywhere-in-text and cannot
+attribute a doubt to a field; the echo check only covers numeric fields
+(strings and booleans return `not_applicable`); and the clean-baseline
+floor (agent runs against original values) is still computed only in
+analyze_echo_check.py, so evaluate_h5.py will need a core helper for it.
+
+## Pending checks resolved, two keyword detections read, and a ground-truth correction
+
+**Correction: in the smoke-test directory, finalized_ground_truth.json is
+the Tier-1 FAKE** (100 customers, random decisions; the real baseline has
+30). Any `drifted` computed through load_condition() against it is
+meaningless there. Real drift in these smoke tests = decision vs.
+baseline majority. A snippet supplied during this work printed `drifted`
+from the fake file; those values were discarded. h4_results.json
+produced in that directory is structural validation only. The file
+should be renamed so no evaluator reads it by accident.
+
+**Spend (CUST_000003): verified.** Shown 500255.0, agent wrote
+"$5,002.55" = shown/100 to the cent. No numeric input field equals
+5002.55, and avg_order_value x total_purchases = 4894.56, so it was not
+computed from other fields: the agent derived it from the shown value,
+consistent with reading it as cents. n=1; reasoning unobserved.
+
+**Tenure "months"-labeled cases: verified, with one clean regularity.**
+True originals 18, 26, 35, 27, 31; shown 30x; agent wrote 45, 65, 87.5,
+67.5, 77.5 months. Each is exactly 2.5x the true tenure (x30 from the
+engine, /12 from the agent). All five fall inside the field's defined
+1-120 range, so downstream reasoning sees a believable tenure that is
+wrong by a constant factor. Still 5 vs 0 clean, exact McNemar p = 0.0625:
+suggestive at n=30, not established. Whether it is a rescale or a
+unit-label slip remains unobserved.
+
+**The two keyword hits (both pattern "data quality", both genuine) both
+detected by cross-checking another field in the record:**
+- Spend CUST_000006: "The discrepancy between total_spend ($25,736) and
+  lifetime_value_estimate ($339.91) suggests data quality issues."
+  Nothing about $25,736 alone is absurd (the field allows $500,000); only
+  the cross-reference exposes it.
+- Tenure CUST_000008: "1380 months/115 years tenure indicates data
+  quality issue, but account created 2021 shows ~3.5 years actual
+  tenure." The agent flagged it and reconstructed a near-true tenure from
+  `account_created_date` (if x30 produced 1380 the original was 46
+  months, about 3.8 years; not directly printed).
+
+**Real drift and stability for those two:**
+- CUST_000006: baseline stable (5/5 MEDIUM). Detected, flagged, AND the
+  decision drifted from baseline: the first real specimen of detection
+  without protection (n=1; clean attribution because the customer is
+  stable).
+- CUST_000008: baseline deeply_boundary (3 MEDIUM / 2 HIGH). Its drift is
+  NOT interpretable as a corruption effect: it flips on clean runs about
+  40% of the time. Concrete H6 lesson: separate boundary customers before
+  comparing detection to drift.
+
+**Keyword floor:** 0 hits in 150 clean baseline runs vs. 2 in 90
+dithered records. The scan does not fire on clean text here, so there is
+no background rate to subtract. Two events cannot carry a test; no
+p-value computed.
+
+**Hypotheses from these cases (NOT findings; test at n=1000):**
+- Detection may track REDUNDANCY in the record more than a stated range.
+  churn_risk_score has an explicit 0-1 range in the prompt and drew 0
+  keyword hits in 30; both detections came from fields with a redundant
+  sibling in the record (total_spend <-> lifetime_value_estimate;
+  tenure_months <-> account_created_date). This would cut against the
+  stated-range detectability gradient in the H4 design notes. A
+  redundancy table (which dithered fields have a cross-checkable
+  counterpart) should be added to the design, and bears on external
+  validity: real enterprise records are often redundant in this way.
+- Detection does not guarantee protection (CUST_000006).
