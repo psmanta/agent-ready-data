@@ -761,3 +761,85 @@ floor (currently only in analyze_echo_check.py), needed by evaluate_h5.py;
 redundancy table of dithered fields (which have a cross-checkable
 counterpart in the record); evaluate_h4's garbage_filter_analysis() stub
 can now be wired to the echo class, keyword scan and judge.
+
+## Design finding: the engine propagates corruption to some sibling fields (verified n=60)
+
+`recompute_derived` defaults to True, and `_recompute_derived` covers only
+two relationships: churn_risk_score -> is_at_risk (>= 0.60) and
+support_tickets_open -> recently_contacted_support. Verified against real
+engine output (clean record vs. dithered record, field by field):
+- **H4 churn conditions:** is_at_risk changed in 25/60 (implausible) and
+  32/60 (plausible) records. It agrees with the SHOWN (corrupted) score in
+  60/60 and with the original score in only 35/60.
+- **H4 spend and tenure conditions:** no field other than the targeted one
+  changed. lifetime_value_estimate, account_created_date and the rest keep
+  their original values, so a contradiction is available to a careful reader.
+
+**Consequences:**
+1. The detection contrast (0/30 on churn vs. the two cross-field detections
+   on spend and tenure) is partly engine-made: churn's redundant sibling was
+   made to AGREE with the corrupted value, while spend's and tenure's were
+   left contradicting it. It is not independent evidence on stated-range
+   validation vs. relational coherence. A second confound: a scale-swapped
+   churn value of 24.9 can be read as 24.9% (11/30 agents added a % sign).
+2. Churn drift in H4 conflates the corrupted score with a changed at-risk
+   flag that agents explicitly cite ("flagged as at-risk").
+3. The three H4 fields differ in propagated vs. isolated corruption. State
+   this in the design section of any write-up; per-field reporting (already
+   planned) is the right unit.
+4. **Option, not decided:** churn plausible/implausible with
+   recompute_derived=False (2 conditions, about 2,000 calls, roughly $5)
+   would turn the redundancy hypothesis from an observation into a
+   manipulated test.
+
+**Redundancy table (to build):** columns = dithered field, redundant
+siblings present in the record, propagated by the engine (yes/no). Derive it
+from the generator's field relationships and the engine's propagation list,
+pre-specified BEFORE the full run. Never derive it from which fields
+happened to produce detections; that would be circular.
+
+## Plan (agreed order, with adjustments)
+
+1. **Plumbing:** clean-baseline floor helper in evaluate_core.py (verify it
+   reproduces the floor counts already obtained: churn 135 echo / 0 / 0 /
+   15 omitted, spend 92 / 0 / 0 / 58, tenure 52 / 0 / 10 converted / 88, of
+   150 runs each); the redundancy table; garbage_filter_analysis() wired
+   once, stratified by the existing `stability_tier` already carried on
+   every record (no need to wait for H6).
+2. **H6:** tier labels already exist (aggregate_baseline.py ->
+   finalize_ground_truth -> stability_tier on every record). To build:
+   evaluate_h6.py (per-tier drift rates, ordering consistency, median
+   ratio, Fisher check) and the adaptive refinement runner.
+3. **The full run is the gate for everything "executed."** Amendment
+   estimate before boundary expansion: about 58,000-59,000 calls,
+   $135-137 standard / $67-68 Batch. The judge costs about $0.001 per
+   record (roughly $6 for H4's six conditions, roughly $52 for all). Run the
+   5,000-call baseline first (about $12): tiers gate every stratified
+   analysis.
+4. **Headline cross-tabs (echo x drift, detection x drift):** primary
+   analysis on stability_tier == stable for clean attribution, with boundary
+   strata reported SEPARATELY, not discarded (H6 asks about them directly,
+   and dropping them changes the estimand).
+5. **Stratified human audit** per the design above.
+
+## Findings to carry into the final analysis, and what each needs to graduate
+
+1. **Tenure rescale regularity.** Observed: 5/30 dithered tenure records
+   divide the shown value by 12 but keep the "months" label, each landing
+   exactly 2.5x the true tenure (x30 from the engine, /12 from the agent)
+   and inside the field's 1-120 range; 0/150 clean runs do this (paired
+   exact McNemar p = 0.0625). The arithmetic is solid; "implicit rescaling"
+   is an interpretation (a unit-label slip fits equally well). Graduates
+   with a replication at n=1000 and its magnitude dose-response.
+2. **Redundancy hypothesis.** Reworded as a hypothesis, with the
+   propagation confound above stated alongside it. Graduates only with the
+   pre-specified redundancy table and either the n=1000 detection rates by
+   table row or the no-propagation churn conditions.
+3. **Deterministic text methods fail on this task.** Whole-text severity-word
+   matching failed (vocabulary reused across independent judgments); the
+   windowed-proximity variant failed on the same example ("low fraud risk"
+   within eight words of "churn risk"). This is a solid NEGATIVE result for
+   the two simple approaches, and it justified building the judge. It does
+   not show that a classifier is required or sufficient: the judge gave
+   three different labels to three near-identical phrasings, so claim only
+   the negative result.
