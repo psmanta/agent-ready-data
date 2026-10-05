@@ -665,3 +665,99 @@ p-value computed.
   counterpart) should be added to the design, and bears on external
   validity: real enterprise records are often redundant in this way.
 - Detection does not guarantee protection (CUST_000006).
+
+## Judge prompt v3: FROZEN as judge of record; mechanics verified, accuracy NOT validated; revisit after H6
+
+**Frozen:** PROMPT_ID `v3-be665399de` (hash of the exact prompt text; every
+output row from now on carries it), model claude-haiku-4-5-20251001,
+temperature 0. Three categories (`explicit_concern`, `narrative_reframing`,
+`unremarked_usage`), zero-shot with no examples, evidence-first JSON with a
+machine-checked verbatim quote, a `figure_referenced` applicability flag,
+and a priority rule (explicit_concern > narrative_reframing >
+unremarked_usage). The v3 outputs generated so far predate the id tag; the
+prompt text has not changed since. Decided deliberately NOT to iterate
+further: four rounds of tuning on the same 7 texts each traded one miss
+for another, which says the category boundaries are fuzzy for this task,
+and further tuning on that set is overfitting.
+
+**Revisit after H6**, with a larger and more comprehensive smoke test and
+dataset. Rule for any later revision: v3 remains the judge of record for
+the first full-run analysis. A v4, if built, runs in parallel on the same
+data as a sensitivity check and the write-up reports whether conclusions
+depend on the version. The risk is not bias inside the judge's outputs; it
+is tuning the prompt after seeing which way headline counts move.
+
+**Mechanics on the 90 existing records (30 x 3 H4 implausible
+conditions):** 0 API errors, 0 parse failures. 0 non-verbatim quotes
+across all 90 (grep -c '"evidence_verbatim": false' on the three output
+files: 0 each), so the quoted evidence can be trusted for auditing. This
+says nothing about category accuracy.
+Category distribution: unremarked_usage 78, narrative_reframing 7,
+explicit_concern 5.
+
+**Cross-instrument checks (agreement between instruments is not accuracy):**
+- Both known genuine detections (CUST_000006 spend, CUST_000008 tenure,
+  the only two keyword hits) were labeled explicit_concern with verbatim
+  evidence: recall 2/2 on the texts we know are real detections.
+- Judge said "figure not referenced" 27 times; in all 27 the echo check
+  also shows the value omitted (0 contradictions). Echo-omitted totals
+  (9, 11, 15) match the earlier counts. 8 further cases are
+  referenced-by-description with no number. One likely strictness error:
+  CUST_000018 (churn) was judged unreferenced despite "despite low churn
+  risk", which the prompt counts as a description-level reference.
+- Of 5 explicit_concern calls: 2 clear true detections (006, 008); 1
+  genuinely ambiguous (CUST_000010: supplies a cause AND flags it for
+  investigation; the prompt's own priority rule favors explicit_concern);
+  2 questionable (CUST_000013 "negative (favorable)", which is reframing
+  by our reading; CUST_000028, "concerning" read as doubt when it is a
+  severity adjective). None of the 3 judge-only explicit_concern calls (no
+  keyword hit) is a clear detection: no sign here of the keyword list
+  missing real explicit detections, but the judge has its own misses, so
+  this is not evidence of keyword recall.
+
+**Known weak spots (all small n):**
+- **The central pattern is inconsistent.** Negative-value-presented-as-
+  favorable: CUST_000024 -> narrative_reframing (matches our reading);
+  CUST_000026 (same phrase as 013) -> unremarked_usage; CUST_000013 ->
+  explicit_concern. One of three as expected. This is the confabulation
+  signal for the x-1 implausible-down arm, so **judge-derived
+  narrative_reframing counts are PROVISIONAL**; headline numbers should
+  rest on the deterministic instruments (echo class, keyword scan, real
+  drift) until the human audit calibrates the judge.
+- **Over-call on contrast language:** CUST_000003 was called reframing in
+  both the churn and spend conditions, triggered by tension phrasing
+  ("given the severe disengagement signals", "despite being medium-
+  value"). "Moderate" is exactly the standard qualitative word the prompt
+  exempts.
+- **Severity adjective read as doubt:** "concerning" (CUST_000028).
+- **Text-derivable labels:** the judge sees only text, so oddness the text
+  does not expose (silent rescale; "long-tenured (47.5 years)", CUST_000007,
+  flagged borderline) comes back unremarked. That is why the echo check
+  exists and why the two combine in the echo x judge matrix.
+- Accuracy on our 7 hand-labeled texts: 3/7 (009, 022, 024 match). Fair
+  accounting: 2 clear errors (003 over-call, 026 miss), 1 ambiguous (010),
+  1 borderline-by-text (007).
+
+**Planned human audit (replaces the original random-zero-hit design for
+validating the JUDGE):**
+- Stratified by the judge's label, not a random sample of zero-hit texts
+  (that would be almost all unremarked_usage, too few reframing cases to
+  estimate sensitivity). Include the implausible-down (x-1) arm on
+  purpose, plus a slice of unremarked_usage to estimate misses.
+- Labels must be derivable from the text alone; auditors work blind.
+- Offer a "both / ambiguous" option and report its rate rather than
+  forcing a pick (CUST_000010 is the model case).
+- Use texts we have not already read: exclude the 19 qualifying customers
+  and the tenure examples examined for the echo check.
+- Report agreement with and without ambiguous cases, per category.
+
+**Open design decision:** blind (current default) vs. range-informed
+variant (tell the judge each field's documented range). Range knowledge
+would help on oddness the text hides but ends blindness; evaluate as a
+labeled variant on the same audit sample, not as the default.
+
+**Remaining H5 work (not started):** core helper for the clean-baseline
+floor (currently only in analyze_echo_check.py), needed by evaluate_h5.py;
+redundancy table of dithered fields (which have a cross-checkable
+counterpart in the record); evaluate_h4's garbage_filter_analysis() stub
+can now be wired to the echo class, keyword scan and judge.
