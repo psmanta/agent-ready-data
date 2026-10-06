@@ -1664,6 +1664,7 @@ _NUM_RE = re.compile(
     r"(?P<sign1>[-\u2212\u2013])?\s?\$?\s?(?P<sign2>[-\u2212\u2013])?"
     r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?(?P<pct>%)?"
 )
+_MAGNITUDE_RE = re.compile(r"(?:(?P<s>[kKMB])|\s*(?P<w>thousand|million|billion))\b")
 _UNIT_RE = re.compile(r"[\s-]*(years?|yrs?|months?|mos?|days?)\b", re.IGNORECASE)
 _UNIT_CANON = {"year": "years", "yr": "years", "month": "months", "mo": "months", "day": "days"}
 
@@ -1691,9 +1692,19 @@ def _numeric_tokens(text: str) -> List[Dict[str, Any]]:
         ratio = (m.start() > 0 and text[m.start() - 1] == "/") or \
                 (tail[:1] == "/" and tail[1:2].isdigit())
         scale, suffix = 1.0, ""
-        km = re.match(r"[kK]\b", tail)
+        # Magnitude suffixes: K/k (thousand), M (million), B (billion), or the
+        # words. Corrupted values are often huge and agents abbreviate them
+        # ("$4.78M"); an earlier version handled only K, so these were scored
+        # 'omitted' -- found by reading the omitted bucket on real dithered text.
+        # Lowercase 'm' is deliberately NOT a suffix (months, minutes).
+        km = _MAGNITUDE_RE.match(tail)
         if km:
-            scale, suffix, tail = 1000.0, "K", tail[km.end():]
+            word = (km.group("w") or "").lower()
+            letter = km.group("s") or ""
+            scale = {"thousand": 1e3, "million": 1e6, "billion": 1e9}.get(word) or \
+                    {"k": 1e3, "K": 1e3, "M": 1e6, "B": 1e9}[letter]
+            suffix = letter if letter else " " + word
+            tail = tail[km.end():]
         plus = tail.startswith("+")
         if plus:
             tail = tail[1:]
@@ -1787,3 +1798,220 @@ def classify_value_echo(
         if conv:
             _fill(conv[0], "converted", factor=name); return result
     return result
+
+
+# ============================================================================
+# H5 — CLEAN-BASELINE FLOORS (what agents do when nothing is corrupted)
+# ============================================================================
+# An echo class or a keyword hit only means something relative to how often the
+# same thing happens on clean data: agents legitimately say "4+ years" for 56
+# months, and skip a field in their reasoning about half the time. These helpers
+# compute that floor from the clean baseline runs (5 per customer).
+#
+# The 5 runs per customer are NOT independent, so run-level rates are point
+# estimates only -- put no interval on them. For paired tests use the
+# customer-level lists, which answer "did this customer EVER do X on clean
+# data", the right counterpart to one dithered record per customer.
+
+def load_baseline_customers(path: Path) -> Dict[str, Any]:
+    """customer_id -> baseline entry (run_details, majority_decision, stability...)
+    from baseline_reference.json."""
+    with open(path) as f:
+        return json.load(f)["customers"]
+
+
+def clean_baseline_echo_floor(
+    records: List[Dict[str, Any]],
+    field: str,
+    baseline_customers: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    For each customer whose `field` was dithered, classify every clean baseline
+    run's reasoning against the ORIGINAL (undithered) value with
+    classify_value_echo(): the floor against which a dithered condition's echo
+    classes are read.
+
+    `records` need only customer_id, dither_fields, and dither_original, so
+    load_condition() output works and so does a list built straight from
+    dither_reference.json (no ground truth required).
+
+    Returns JSON-serializable counts:
+      class_counts / class_rates   run-level, over all baseline runs
+      converted_breakdown          {"factor|unit_after": n} for conversions
+      customers_with_any_run       class -> customer ids with >= 1 run in that
+                                   class (for customer-level paired tests)
+      n_customers_missing_baseline customers skipped for lack of baseline runs
+    """
+    class_counts: Dict[str, int] = {}
+    converted: Dict[str, int] = {}
+    customers_with: Dict[str, List[str]] = {}
+    n_runs = n_customers = n_missing = 0
+
+    for rec in records:
+        if field not in rec.get("dither_fields", []):
+            continue
+        entry = baseline_customers.get(rec["customer_id"])
+        if entry is None or not entry.get("run_details"):
+            n_missing += 1
+            continue
+        original = rec["dither_original"].get(field)
+        n_customers += 1
+        seen = set()
+        for run in entry["run_details"]:
+            res = classify_value_echo(original, run.get("decision_reasoning"))
+            cls = res["echo_class"]
+            class_counts[cls] = class_counts.get(cls, 0) + 1
+            n_runs += 1
+            seen.add(cls)
+            if cls == "converted":
+                key = f'{res["factor"]}|{res["unit_after"]}'
+                converted[key] = converted.get(key, 0) + 1
+        for cls in seen:
+            customers_with.setdefault(cls, []).append(rec["customer_id"])
+
+    return {
+        "field": field,
+        "n_customers": n_customers,
+        "n_runs": n_runs,
+        "n_customers_missing_baseline": n_missing,
+        "class_counts": class_counts,
+        "class_rates": {k: v / n_runs for k, v in class_counts.items()} if n_runs else {},
+        "converted_breakdown": converted,
+        "customers_with_any_run": customers_with,
+    }
+
+
+def clean_baseline_keyword_floor(
+    baseline_customers: Dict[str, Any],
+    customer_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Frozen-keyword-scan hits among the clean baseline runs (optionally only
+    for `customer_ids`). If clean text also trips the scan, a dithered
+    condition's hit rate is not all signal."""
+    wanted = set(customer_ids) if customer_ids is not None else None
+    n_customers = n_runs = n_hits = 0
+    with_hit: List[str] = []
+    for cid, entry in baseline_customers.items():
+        if wanted is not None and cid not in wanted:
+            continue
+        runs = entry.get("run_details", [])
+        if not runs:
+            continue
+        n_customers += 1
+        any_hit = False
+        for run in runs:
+            n_runs += 1
+            if detect_h5_keywords(run.get("decision_reasoning"))["detected"]:
+                n_hits += 1
+                any_hit = True
+        if any_hit:
+            with_hit.append(cid)
+    return {
+        "n_customers": n_customers,
+        "n_runs": n_runs,
+        "n_hits": n_hits,
+        "hit_rate": (n_hits / n_runs) if n_runs else 0.0,
+        "customers_with_any_hit": with_hit,
+    }
+
+
+# ============================================================================
+# STRATIFIED OUTCOME TABLES AND PAIRED BINARY COMPARISONS
+# (H4 garbage-filter analysis; reusable by evaluate_h5 and the H6 cross-tabs)
+# ============================================================================
+# A boundary customer who "drifts" under a dithered run may simply be flipping
+# at its own clean rate (a deeply_boundary customer flips ~40% of the time with
+# no corruption at all), so every cross-tab that reads drift as an effect of
+# corruption is reported per stability stratum: "stable" (clean attribution)
+# and "boundary" (reported separately, never discarded: H6 asks about these
+# customers directly, and dropping them changes the estimand).
+
+BOUNDARY_TIERS = ("lightly_boundary", "deeply_boundary", "tied_no_majority")
+
+
+def stability_stratum(record: Dict[str, Any]) -> str:
+    """'stable' | 'boundary' | 'unknown', from the record's stability_tier."""
+    tier = record.get("stability_tier")
+    if tier == "stable":
+        return "stable"
+    if tier in BOUNDARY_TIERS:
+        return "boundary"
+    return "unknown"
+
+
+def outcome_rate_by_group(
+    records: List[Dict[str, Any]],
+    group_fn,
+    outcome_fn=lambda r: bool(r["drifted"]),
+) -> Dict[str, Dict[str, Any]]:
+    """{group: {n, k, rate, ci}} with Wilson 95% intervals. A record whose
+    group_fn or outcome_fn returns None is skipped (not applicable)."""
+    counts: Dict[Any, List[int]] = {}
+    for r in records:
+        g = group_fn(r)
+        o = outcome_fn(r)
+        if g is None or o is None:
+            continue
+        c = counts.setdefault(g, [0, 0])
+        c[0] += 1
+        c[1] += bool(o)
+    out = {}
+    for g in sorted(counts, key=str):
+        n, k = counts[g]
+        lo, hi = wilson_interval(k, n)
+        out[str(g)] = {"n": n, "k": k, "rate": k / n, "ci": [lo, hi]}
+    return out
+
+
+def paired_binary_outcomes(records_a, records_b, key_fn, customer_filter=None):
+    """Aligned (a, b) boolean lists over customers present in both record sets
+    (optionally restricted to customer_filter), skipping any customer where
+    key_fn is None for either record."""
+    b_by = {r["customer_id"]: r for r in records_b}
+    a_vals, b_vals, ids = [], [], []
+    for ra in records_a:
+        cid = ra["customer_id"]
+        rb = b_by.get(cid)
+        if rb is None or (customer_filter is not None and cid not in customer_filter):
+            continue
+        va, vb = key_fn(ra), key_fn(rb)
+        if va is None or vb is None:
+            continue
+        a_vals.append(bool(va)); b_vals.append(bool(vb)); ids.append(cid)
+    return a_vals, b_vals, ids
+
+
+def paired_binary_comparison(records_a, records_b, key_fn, customer_filter=None,
+                             min_discordant: int = 10) -> Dict[str, Any]:
+    """Exact McNemar's on a paired binary outcome, reported with the raw 2x2 so
+    the reader can see how many events there are. a_only = outcome under A but
+    not B. low_power flags fewer than `min_discordant` discordant pairs: with
+    rare events (a ~2% keyword rate) most comparisons are underpowered and the
+    counts, not the p-value, are the finding."""
+    a, b, _ = paired_binary_outcomes(records_a, records_b, key_fn, customer_filter)
+    n = len(a)
+    if n == 0:
+        return {"n_pairs": 0, "note": "no paired customers"}
+    res = mcnemar_paired_test(a, b)
+    return {
+        "n_pairs": n,
+        "rate_a": sum(a) / n, "rate_b": sum(b) / n,
+        "a_only": res["b_x_only"], "b_only": res["c_y_only"],
+        "both": sum(1 for x, y in zip(a, b) if x and y),
+        "neither": sum(1 for x, y in zip(a, b) if not x and not y),
+        "n_discordant": res["n_discordant"],
+        "p_value": res["p_value"],
+        "low_power": res["n_discordant"] < min_discordant,
+    }
+
+
+def load_judge_results(path: Path) -> Dict[str, Dict[str, Any]]:
+    """id ('customer_id:field') -> judge row, from a classify_detection_llm_judge
+    output file. Rows that errored are dropped (counted by the caller if needed)."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            row = json.loads(line)
+            if not row.get("error"):
+                out[row["id"]] = row
+    return out

@@ -21,7 +21,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, ".")
-from evaluate_core import classify_value_echo
+from evaluate_core import classify_value_echo, clean_baseline_echo_floor
 
 CONDITIONS = {
     "h4_churn_risk_score_implausible": "churn_risk_score",
@@ -79,8 +79,8 @@ for cond, field in CONDITIONS.items():
             decisions[d["record_id"]] = d
 
     dith, dith_conv, examples = Counter(), Counter(), []
-    base, base_conv = Counter(), Counter()
-    n_d = n_b = 0
+    floor_recs = []
+    n_d = 0
     for r in ref:
         if not r.get("_dither_applied") or field not in r.get("_dither_fields", []):
             continue
@@ -100,13 +100,11 @@ for cond, field in CONDITIONS.items():
         if (cond, r["customer_id"]) in KNOWN:
             known_seen[(cond, r["customer_id"])] = res
 
-        original = r["_dither_original"][field]
-        for run in baseline.get(r["customer_id"], {}).get("run_details", []):
-            b = classify_value_echo(original, run.get("decision_reasoning"))
-            base[b["echo_class"]] += 1
-            if b["echo_class"] == "converted":
-                base_conv[(b["factor"], b["unit_after"])] += 1
-            n_b += 1
+        floor_recs.append({"customer_id": r["customer_id"], "dither_fields": r["_dither_fields"],
+                           "dither_original": r["_dither_original"]})
+
+    floor = clean_baseline_echo_floor(floor_recs, field, baseline)
+    base, n_b = floor["class_counts"], floor["n_runs"]
 
     print(f"\n{cond}")
     print(f"  dithered  : {fmt(dith, n_d)}")
@@ -118,8 +116,8 @@ for cond, field in CONDITIONS.items():
     print(f"  CLEAN floor (same customers, baseline runs vs. original value):")
     print(f"              {fmt(base, n_b)}")
     print(f"              (5 runs per customer, not independent: treat these rates as point estimates only)")
-    if base_conv:
-        print(f"    clean converted breakdown (factor, unit_after): {dict(base_conv)}")
+    if floor["converted_breakdown"]:
+        print(f"    clean converted breakdown (factor|unit_after): {floor['converted_breakdown']}")
 
 print("\n" + "=" * 78)
 print("HAND-CHECKED CUSTOMERS vs. the echo check")
