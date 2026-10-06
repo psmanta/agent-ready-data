@@ -769,7 +769,7 @@ class DitherEngine:
 # ============================================================================
 #
 # Condition counts per the amendment (H4 reduced from 6 to 3 — see below):
-#   H1: 14   H2: 12   H3: 15   H4: 6   H7: 4   H8a: 2   H8b: 0-1 (conditional)
+#   H1: 14   H2: 12   H3: 15   H4: 8   H7: 4   H8a: 2   H8b: 0-1 (conditional)
 #   Total: 50-51 (H1 +2 comparison fields; H3 +4 after the field-composition
 #   correction, the payment_failures individual condition, and the reference
 #   sets gaining the correlated arms the GEE DiD requires)
@@ -999,6 +999,31 @@ def build_h4_conditions(seed: int = 42) -> List[DitherConfig]:
                 correlated=True, entry_error_plausibility=plausibility,
                 seed=seed + i * 2 + j,
                 condition_id=f"h4_{f}_{plausibility}"))
+
+    # --- Propagation arm: churn with ISOLATED corruption (2 more conditions) ---
+    # The default conditions above propagate churn_risk_score into is_at_risk
+    # (recompute_derived=True): verified on real engine output that the flag
+    # then agrees with the SHOWN corrupted score in 60/60 records, i.e. the
+    # engine removes the one contradiction an agent could use to catch the
+    # error. spend and tenure have no propagation, so their siblings
+    # (lifetime_value_estimate, account_created_date) contradict the
+    # corrupted value. These two conditions repeat the churn arms with
+    # recompute_derived=False, so is_at_risk keeps its ORIGINAL value and
+    # contradicts the corrupted score wherever propagation would have
+    # flipped it. They deliberately reuse their counterparts' seeds
+    # (seed + 0 plausible, seed + 1 implausible): each customer should get
+    # the IDENTICAL corrupted churn value in both arms (verified by test),
+    # so the sibling flag is the only difference and the comparison is a
+    # clean paired test of the redundancy hypothesis. Only records where
+    # propagation changes the flag carry a contradiction; the analysis
+    # should stratify on that.
+    for j, plausibility in enumerate(["plausible", "implausible"]):
+        conditions.append(DitherConfig(
+            fields=["churn_risk_score"], magnitude=0.15,
+            dither_type=["h4_entry_error"], correlated=True,
+            entry_error_plausibility=plausibility, recompute_derived=False,
+            seed=seed + j,
+            condition_id=f"h4_churn_risk_score_{plausibility}_isolated"))
     return conditions
 
 
@@ -1123,7 +1148,7 @@ def build_all_conditions(seed: int = 42) -> List[DitherConfig]:
     orchestration script (generate_dithered_data.py) after checking the
     additive-baseline threshold.
 
-    Returns 53 conditions total (14+12+15+6+4+2). H8b (0-1 more) is
+    Returns 55 conditions total (14+12+15+8+4+2). H8b (0-1 more) is
     handled outside this function.
     """
     return (
