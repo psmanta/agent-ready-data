@@ -518,7 +518,7 @@ with the instrument.
 |---|---|---|---|---|
 | churn, dithered (n=30) | 10 | 11 | 0 | 9 |
 | churn, clean (150 runs) | 135 | 0 | 0 | 15 |
-| spend, dithered (n=30) | 18 | 0 | 1 | 11 |
+| spend, dithered (n=30) | 20 | 0 | 1 | 9 |   (was 18 / 11 before the magnitude-suffix fix below) |
 | spend, clean (150 runs) | 92 | 0 | 0 | 58 |
 | tenure, dithered (n=30) | 4 | 0 | 11 | 15 |
 | tenure, clean (150 runs) | 52 | 0 | 10 | 88 |
@@ -544,9 +544,11 @@ customer: point estimates only.
   Interpretation is open: the numbers match shown/12 exactly with a
   months label, but intent is unobserved (a rescale into a believable
   range versus a unit-label slip).
-- **Omission is elevated only for churn (30% vs 10% clean);** spend (37%
-  vs 39%) and tenure (50% vs 59%) show no difference. Suggestive; needs
-  crossing with drift before calling it filtering.
+- **RETRACTED: "omission is elevated for churn (30% vs 10% clean)."** See
+  "Echo-check audit" below: the clean omissions are a few customers who never
+  quote the score, and most dithered omissions still describe churn
+  qualitatively. Spend (30% vs 39% after the fix) and tenure (50% vs 59%)
+  show no difference.
 - **Spend: 1/30 shown $500,255.00 and wrote "$5,002.55"**, exactly
   shown/100 to the cent. Verified since (see "Pending checks resolved"): no other input field
   carries 5002.55, so the agent derived it from the shown value.
@@ -873,3 +875,220 @@ input-identical records) is written into the amendment.
 **Not yet built:** the evaluator side. evaluate_h4.py still loads the nine
 original conditions; the isolation analysis belongs with the
 garbage_filter_analysis() wiring.
+
+## Echo-check audit: reading the "omitted" bucket on both sides; one matcher bug fixed
+
+**What the floor-helper check did and did not prove.** h5_verify_floor_helper.py
+reproduces the earlier real-data counts exactly (churn 135/0/0/15, spend
+92/0/0/58, tenure 52/0/10/88 of 150 runs; keyword floor 0/150): the helper
+equals the old logic. It cannot show the old logic is right, because both
+share classify_value_echo(), and every matcher miss lands silently in
+"omitted". h5_audit_omitted.py reads that bucket on both sides.
+
+**Hypothesis tested and NOT supported.** The matcher requires two significant
+digits for rounded matches, so single-digit approximations ("nearly 4 years",
+"roughly 2 years", "over 4 years", number words) score as omitted. Clean
+tenure values are small and dithered ones large, so this could have flattered
+the dithered-vs-clean conversion comparison. In the real data it does not:
+of 88 clean tenure runs scored omitted, 78 do not discuss tenure at all; the
+only 5 with a number-bearing sentence are one customer writing "9+ months of
+inactivity" (a different quantity). The tenure conversion comparison (11/30
+dithered vs. 10/150 clean) is not flattered by this gap in this sample.
+
+**Matcher bug found by the audit, fixed.** Corrupted values are often huge and
+agents abbreviate them. Two spend texts were scored omitted: shown $4,778,987,
+wrote "$4.78M"; shown $4,000,427, wrote "$4M+". The matcher handled K but not
+M. Now handles K/k, M, B and the words thousand/million/billion; lowercase "m"
+is deliberately not a suffix (months). Predicted before the rerun and
+confirmed: spend dithered echo 18 -> 20, omitted 11 -> 9; no other cell moved,
+including both clean floors.
+
+**Effective sample size.** Each condition shows 84 distinct clean texts among
+150 runs (the same 30 customers' baseline texts every time): 44% of runs are
+exact duplicates at temperature 0. The floors are point estimates; do not put
+intervals on them.
+
+**Churn omission: retracted as a headline.** The clean 15 omitted runs look
+like exactly three customers (000011, 000027, 000008) omitting the score in
+all five runs (inferred from sampled texts; confirm with customer-level
+lists). At least two of them (000011, 000027) are also among the dithered
+omitters, and only 1 of the 9 dithered churn omissions fails to discuss churn
+at all: the rest describe it qualitatively ("negative (favorable)", "low churn
+risk", "flagged as at-risk"). "Omitted" means the NUMBER is absent, not the
+field; quoting vs. describing, not dropping. The judge's figure_referenced
+flag is the right instrument for "field not mentioned".
+
+**Spend omission:** about 30% dithered vs. 39% clean after the fix: no real
+difference. All eight sampled clean candidates are sentences about the
+lifetime value estimate: agents cite lifetime value instead of total spend.
+
+**A lead, not a finding.** CUST_000020, shown 1,680 months (140 years), wrote
+"long-tenured customer (14 years)": exactly /120, as if a zero were dropped
+as a typo, landing on a believable value (the true tenure was 56 months). The
+matcher does not test /120, so it sits in omitted. n=1. **Policy: freeze the
+confirmatory factor list now** (x100, /100, /12, x12, plus K/M/B/word
+suffixes). Any further factor (e.g. /120) belongs only in a separately labeled
+exploratory scan at n=1000; adding factors after seeing one case is the same
+forking-paths problem avoided elsewhere.
+
+**Where each earlier echo claim now stands:**
+- Solid: churn % sign 11/30 vs. 0/150 clean (paired exact McNemar p = 0.001);
+  unaffected by the audit.
+- Suggestive only: tenure kept-"months" label 5/30 vs. 0/150 (p = 0.0625);
+  unaffected by the audit.
+- Holds: the tenure conversion comparison is not flattered by the feared
+  single-digit-years undercount in this sample.
+- Retracted: churn omission elevated.
+- No difference: spend and tenure omission.
+
+**Open:** customer-level omission pairing (a "clean omitter" = at least 3 of 5
+clean runs omit the value; pair against the dithered row); a slice of clean
+baseline texts in the human audit as negative controls for the judge's
+false-positive floor (about $0.15 of judge calls per field).
+
+## Garbage-filter analysis: built (evaluate_h4.py; replaces the stub)
+
+**What it computes**, per field and arm (drift, plausible, implausible; plus
+the two isolated arms for churn), per stratum (stable / boundary / all):
+drift, keyword detection, drift by detected vs. not detected, drift by echo
+class, and drift by judge category when judge outputs are supplied
+(`--judge_dir classifier_output`, joined by id `customer:field`). Also the
+detection spike (paired McNemar's, implausible vs. plausible) and the
+isolation analysis (isolated vs. propagated churn, split into
+contradiction-carrying and input-identical customers, the latter a built-in
+negative control). A design check reads both isolated arms' dither_reference
+and reports whether the matched-pair assumption (identical corrupted churn
+value per customer) actually holds. Reusable primitives live in
+evaluate_core.py: stability_stratum, outcome_rate_by_group,
+paired_binary_comparison, load_judge_results. The pre-specified primary tests
+(5 per family, Holm-adjusted) are recorded in the amendment.
+
+**Verified on a planted-effect environment** (real engine output for all 55
+conditions at n=60, synthetic decisions with effects planted on purpose):
+- recovers the planted detection spike on spend and tenure (16 vs 0 and 15 vs
+  3 discordant pairs) and stays null on churn, where none was planted;
+- recovers the isolation effect only among contradiction-carrying records
+  (10 vs 0, p = 0.002 implausible; 7 vs 1, p = 0.07 plausible, correctly
+  flagged low_power); the input-identical negative control shows exactly zero
+  differences on keyword, drift and judge;
+- shows lower drift on implausible only among stable customers, with boundary
+  customers behaving as planted noise;
+- drift by keyword, echo class and judge category follow the planted structure;
+- failure paths: runs without a judge, without the isolated conditions, and
+  reports a broken matched-pair assumption (one altered value flips design_ok
+  to false);
+- the four pre-existing analyses are byte-identical old vs. new on the same
+  data; validate_h4_schema.py now checks the whole block (2x2 sums, ranges,
+  interval/rate consistency, primary tags only on the stable stratum, Holm
+  >= raw) and catches all six corruptions tried.
+
+**Not verified:** anything on real agent output. The synthetic environment
+proves the code recovers effects it is told exist; it says nothing about
+whether those effects exist. The smoke-test directory is unsuitable for a real
+run (mixed seeds and sample sizes, no real ground truth, no isolated
+conditions), so the first genuine exercise is the full run.
+
+**Still open from the plan:** redundancy table; customer-level omission
+pairing; evaluate_h6.py and the refinement runner; the full-run spending
+decision.
+
+## H4 garbage-filter analysis: implemented in evaluate_h4.py; independently verified
+
+`garbage_filter_analysis()` is no longer a stub. For each field and arm
+(drift, plausible, implausible; for churn also the two isolated arms) and
+each stratum (stable = clean attribution; boundary = lightly/deeply boundary
+and tied_no_majority, reported separately and never dropped; all) it reports:
+drift rate; keyword-scan detection rate; drift by detected/not-detected (the
+four-way table); drift by echo class; and, when judge outputs are supplied,
+drift by judge category. Plus the detection spike (paired exact McNemar's,
+implausible vs. plausible, with the raw 2x2), the isolation analysis for churn
+(isolated vs. propagated, split into contradiction-carrying and
+input-identical records, the latter a built-in negative control), and the
+primary tests gathered into a Holm-adjusted family per detector (keyword;
+judge). Usage: `python3 evaluate_h4.py [--judge_dir classifier_output]`; the
+isolated conditions are optional (skipped with a notice if not generated).
+
+**Verified against known answers (the code was reviewed and tested, not
+assumed):** with decisions planted at known drift and detection rates per arm,
+identical outputs for input-identical customers, and boundary tiers, an
+independent recomputation (plain loops, scipy exact binomial, statsmodels
+Holm; none of the evaluator's code paths) matched on 1,021 checks: every
+arm x stratum table, Wilson intervals, four-way tables, spikes, the isolation
+split and its negative control (zero discordant by construction), exact
+p-values, and the Holm-adjusted family. Edge cases: no events anywhere (no
+crash; all p = 1.0, flagged low_power, no direction claimed); isolated
+conditions missing (skipped cleanly); judge join with errored rows (dropped:
+57 of 60 joined; judge spike matched an independent recomputation; unjudged
+conditions carry no judge fields). validate_h4_schema.py caught seven
+deliberate corruptions by name. The four unrelated sections of the H4 output
+are byte-identical to the previous evaluator on the same data.
+
+**Pre-specification gap to close before the full run:** the code tags five
+tests primary (three detection spikes, implausible vs. plausible on stable
+customers, one per field; two isolation comparisons on contradiction-carrying
+stable customers; predicted direction a_only > b_only; Holm within each
+detector family). The amendment pre-specifies only the isolation comparisons,
+so the three detection-spike tests are not yet pre-specified anywhere.
+
+**Limits carried forward:** keyword detection is anywhere-in-text and cannot say
+which field was doubted; judge-derived numbers are provisional until the human
+audit; most paired comparisons will be low-powered on rare events, so read
+the raw 2x2 counts; records with a missing or unrecognized stability tier fall
+in "all" only.
+
+## Pending amendment edits: checklist for the full amendment pass
+
+Captured now so nothing is lost; to be folded into 1b_DESIGN_AMENDMENT_1.md when
+the full amendment is revised, not before. The H4 isolated-corruption arm,
+condition counts and cost figures are already in the amendment.
+
+**1. H4 statistical plan: pre-specified primary tests (decision: capture now,
+fold in later; must be in the amendment BEFORE the full run).** Proposed text:
+
+> **Pre-specified primary tests for the garbage-filter question.** Declared
+> before the full run. (1) Three detection-spike tests, one per field: among
+> stable customers, a paired exact McNemar's comparing explicit detection (the
+> frozen keyword scan) under the implausible condition against the plausible
+> condition for the same customers. Predicted direction: more detection under
+> implausible. (2) Two isolation tests: among stable customers whose
+> `is_at_risk` propagation would have flipped (the contradiction-carrying
+> records), a paired exact McNemar's comparing keyword detection in the
+> isolated arm against the propagated arm. Predicted direction: more
+> detection in the isolated arm. The five tests form one family corrected
+> with Holm; the judge's `explicit_concern` forms a parallel family once the
+> judge is validated. Everything else in the garbage-filter analysis (drift
+> and echo-class tables, boundary-stratum results, drift comparisons,
+> judge-derived numbers before human-audit calibration) is exploratory and
+> labeled as such. The raw 2x2 counts are reported with every test because
+> most comparisons will be low-powered on rare events.
+
+These correspond exactly to the tests tagged `primary` in evaluate_h4.py.
+
+**2. H5 section rewrite.** The amendment still describes the earlier design.
+To reflect: (a) the frozen keyword list: the amendment's regexes lack the
+adverb forms; the seven adjective patterns (unusual, atypical, implausible,
+odd, strange, suspicious, questionable) now include them, and the code in
+evaluate_core.py is authoritative; (b) the three-category blind judge,
+frozen as PROMPT_ID v3-be665399de, with the figure_referenced flag, the
+machine-checked verbatim quote, and the priority rule; (c) the deterministic
+echo check: its classes, and the frozen confirmatory factor list (x100,
+/100, /12, x12, plus K/M/B and word suffixes), exploratory factors kept
+separate; (d) the clean-baseline floors (echo and keyword); (e) the
+stratified human-audit design for validating the judge (stratified by judge
+label, implausible-down arm included, text-derivable labels, an ambiguous
+option, texts not previously read, clean baseline texts as negative
+controls); (f) judge-derived numbers provisional until that audit.
+
+**3. Statistical Methodology note:** a new entry for paired exact McNemar's on
+rare binary events (detection), reported with the raw 2x2 and a low-power flag,
+with Holm-adjusted primary families.
+
+**4. Cost:** the judge adds about $0.001 per record; scope (H4 only vs. every
+condition) is still undecided, so the cost paragraph should state the unit
+cost and leave the total open.
+
+**5. Redundancy table (to be built, pre-specified before the full run):**
+dithered field; redundant siblings present in the record; whether the engine
+propagates the corruption to them. Derived from the generator's field
+relationships and the engine's propagation list, never from which fields
+produced detections.
