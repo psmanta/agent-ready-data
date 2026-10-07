@@ -27,6 +27,14 @@ dithering, so they AGREE with the corrupted value and the contradiction is
 removed. A sibling the engine recomputes is "propagated"; the remaining
 siblings are "uncorrected", and only those can expose the corruption.
 
+A second, independent attribute is recorded per field: whether the agent's system prompt
+STATES a value range for it (only nps_score, email_open_rate, churn_risk_score and
+fraud_risk_score). It matters for H4: an "implausible" churn value violates a range the
+agent was told, while an "implausible" total_spend or tenure_months breaks no stated rule,
+so field-to-field differences in implausible-value handling are partly confounded with
+whether a range was stated. The ranges are parsed from the agent file itself, so they
+cannot drift from what the agent is actually told.
+
 Direction matters: strict relations expose every change to the field, but bounded,
 approximate and soft relations expose a corruption only when it pushes the value
 outside the region the relationship allows (e.g. support_tickets_open dithered
@@ -37,12 +45,13 @@ corruption is exposed by them.
 Run `python3 field_redundancy.py` to print the table and verify every claim
 against the generator and the engine (exit code 1 on any failure).
 """
+import re
 import sys
 import warnings
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "shared" / "data_generation"))
 
@@ -112,6 +121,13 @@ SEGMENT_BANDS = {
 }
 LTV_BANDS = {"high_value": (2.5, 4.0), "medium_value": (1.5, 2.5), "low_value": (1.0, 1.5), "at_risk": (0.8, 1.2)}
 
+# Value ranges the agent's system prompt states (parsed from the agent file and verified).
+STATED_RANGES: Dict[str, Tuple[float, float]] = {
+    "nps_score": (0.0, 10.0), "email_open_rate": (0.0, 1.0),
+    "churn_risk_score": (0.0, 1.0), "fraud_risk_score": (0.0, 1.0),
+}
+AGENT_FILE = Path(__file__).resolve().parent / "business_decision_agent.py"
+
 # Fields with no generator-defined link to any other field.
 INDEPENDENT_FIELDS = ("avg_resolution_time_hours", "refund_rate", "acquisition_channel", "phone",
                       "address", "has_pending_order", "has_active_subscription")
@@ -137,17 +153,19 @@ def redundancy_profile(field: str, recompute_derived: bool = True) -> Dict[str, 
     uncorrected = {t: names for t, names in uncorrected.items() if names}
     cls = next((t for t in TIER_ORDER if t in uncorrected), None)
     return {"field": field, "siblings": sib, "propagated": sorted(propagated), "uncorrected": uncorrected,
+            "stated_range": STATED_RANGES.get(field),
             "class": {"soft": "soft_only"}.get(cls, cls or "none")}
 
 
 def format_table() -> str:
-    rows = ["field | strict | bounded | approximate | soft | engine propagates | class (default) | class (isolated)", "-" * 118]
+    rows = ["field | strict | bounded | approximate | soft | engine propagates | class (default) | class (isolated) | range stated to agent", "-" * 135]
     for f in DITHERED_FIELDS:
         p, q = redundancy_profile(f), redundancy_profile(f, recompute_derived=False)
         s = p["siblings"]
         rows.append(" | ".join([f, ",".join(s.get("strict", [])) or "-", ",".join(s.get("bounded", [])) or "-",
                                 ",".join(s.get("approximate", [])) or "-", "segment" if "soft" in s else "-",
-                                ",".join(p["propagated"]) or "-", p["class"], q["class"]]))
+                                ",".join(p["propagated"]) or "-", p["class"], q["class"],
+                                "{}-{}".format(*p["stated_range"]) if p["stated_range"] else "-"]))
     return "\n".join(rows)
 
 
@@ -201,6 +219,39 @@ def verify_against_generator(n: int = 3000, seed: int = 42) -> Dict[str, Any]:
     return {"n": n, "failures": {k: v for k, v in failures.items() if v}, "ltv_bands_match_generator": rules_ok,
             "checked": sorted(failures), "spend_ratio_range": (min(observed["spend_ratio"]), max(observed["spend_ratio"])),
             "ltv_ratio_range": (min(observed["ltv_ratio"]), max(observed["ltv_ratio"]))}
+
+
+def parse_stated_ranges(agent_source: str) -> Dict[str, Tuple[float, float]]:
+    """Value ranges the agent's SYSTEM_PROMPT glossary states, e.g. '- nps_score: ... (0-10, ...'."""
+    start = agent_source.index('SYSTEM_PROMPT = """')
+    block = agent_source[start: agent_source.index('"""', start + 20)]
+    found = {}
+    for line in block.splitlines():
+        m = re.match(r"- (\w+): .*?\((\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", line)
+        if m:
+            found[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+    return found
+
+
+def verify_stated_ranges(n: int = 3000, seed: int = 42, agent_source: Optional[str] = None) -> Dict[str, Any]:
+    """STATED_RANGES must equal what the agent file's prompt says, and clean generated data must respect them."""
+    from base_customer_generator import generate_base_customers
+    problems = []
+    if agent_source is None:
+        if not AGENT_FILE.exists():
+            return {"problems": [f"agent file not found at {AGENT_FILE}"], "parsed": {}}
+        agent_source = AGENT_FILE.read_text()
+    parsed = parse_stated_ranges(agent_source)
+    if parsed != STATED_RANGES:
+        problems.append(f"STATED_RANGES out of date: prompt says {parsed}, table says {STATED_RANGES}")
+    for c in generate_base_customers(n=n, seed=seed):
+        for f, (lo, hi) in STATED_RANGES.items():
+            if not (lo <= c[f] <= hi):
+                problems.append(f"clean {c['customer_id']} {f}={c[f]} outside its stated range {lo}-{hi}")
+                break
+        if len(problems) > 3:
+            break
+    return {"parsed": parsed, "problems": problems}
 
 
 def verify_independence(n: int = 3000, seed: int = 42, threshold: float = 0.20) -> Dict[str, Any]:
@@ -269,6 +320,9 @@ def main() -> int:
     print(f"  spend / (purchases x aov) observed range {g['spend_ratio_range'][0]:.3f}-{g['spend_ratio_range'][1]:.3f}; "
           f"LTV / spend observed {g['ltv_ratio_range'][0]:.2f}-{g['ltv_ratio_range'][1]:.2f}; LTV bands match generator: {g['ltv_bands_match_generator']}")
     ok &= not g["failures"] and g["ltv_bands_match_generator"]
+    r = verify_stated_ranges()
+    print(f"stated-range check: prompt states {r['parsed']}; problems: {r['problems'] or 'none'}")
+    ok &= not r["problems"]
     i = verify_independence()
     print(f"independence check: worst within-segment |rho| per 'independent' numeric field: {i['worst_within_segment_abs_rho']} (threshold {i['threshold']})")
     ok &= not i["failures"]

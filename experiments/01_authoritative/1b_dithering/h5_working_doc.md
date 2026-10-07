@@ -1184,3 +1184,149 @@ primary stratification groups {strict, bounded, approximate} against
 {soft_only, none}, with soft_only reported separately. (2) The spend triad
 lists all three fields as one another's approximate siblings; confirm.
 (3) Whether to pre-specify the `none` fields as negative controls.
+
+## Agent file review (business_decision_agent.py, repo hash 07a86297d669948e)
+
+Confirmed: model claude-haiku-4-5-20251001, temperature 0.0, max_tokens 1024;
+output keys business_decision / agent_confidence / decision_reasoning /
+key_factors; the agent sees everything but record_id (including
+customer_segment and three date fields the glossary never describes:
+account_created_date, last_purchase_date, next_renewal_date); input_hash is an
+md5 of the displayed record. Everything the evaluators assume about the agent
+holds.
+
+**Prompt history of the key_factors instruction.** 1a: "list the 2-3 field
+names", with a concrete example ["total_spend", "churn_risk_score"]. July 1b
+draft: cap kept, placeholder example names. Current repo version: no cap, no
+example (the six changed lines are all in the output-format section). This
+removes a possible anchor (1a's example named two fields that were also among
+its top self-cited fields), but it changes the self-report instrument, so H1's
+replication of 1a's self-reported importance is a replication under a changed
+instrument: compare rank order, not absolute citation rates (no cap means more
+factors per decision). The module docstring lists the differences from 1a
+(examples removed, glossary unchanged) but not this one. The pre-specified
+within-1b stated-vs-revealed analysis is unaffected. Nothing collected under
+the July wording should be pooled with runs under the current wording.
+
+**Observations from reading the file (all verified):**
+- `--max_records` is parsed and never used: passing it processes the whole
+  file (a cost surprise, not a data problem).
+- The glossary states a value range for only four fields: nps_score (0-10),
+  email_open_rate, churn_risk_score and fraud_risk_score (0.0-1.0). None is
+  stated for total_spend, tenure_months, lifetime_value_estimate, and the
+  rest. So "implausible" means different things by field: for churn it
+  violates a range the agent was told; for spend and tenure it is
+  unrealistic but breaks no stated range. This partly confounds the
+  field-by-plausibility interaction and should be a recorded attribute of
+  each field (proposal: add `range_stated_in_prompt` to field_redundancy.py,
+  derived by parsing the prompt itself and verified like the other claims).
+  Consistent with the smoke finding that churn values like 24.9 were
+  reformatted, not flagged, despite the stated 0.0-1.0.
+- "If certain fields suggest conflicting priorities, weigh them..." is
+  inherited from 1a. It concerns priorities, not data validity, but it is the
+  one sentence telling the agent that fields can conflict, and the docstring
+  says the prompt makes no reference to consistency. Same in every condition,
+  so it cannot bias comparisons; it is a caveat on the word "organic" in H5.
+- process_file has no try/except and opens the output with "w": no resume. The
+  base agent (my copy; the repo's is unverified) retries 3 times with 1-2 s
+  backoff and then raises, which aborts the file. At full-run scale a
+  sustained rate limit would restart a condition from record 1.
+
+**Open decisions:** (a) honor --max_records and add a resume mode (append,
+skipping record_ids already present); (b) add `range_stated_in_prompt` to the
+redundancy table; (c) document the key_factors change in the docstring and
+the amendment; (d) wording for H5: detection is measured under a prompt that
+mentions conflicts between fields. Still unseen: shared/agents/ (base_agent.py,
+llm_factory.py); hashes requested.
+
+
+## H1 and the leading-examples question (decision pending)
+
+**What the 1a prompt contained** (restored in the August session): example
+descriptions for each priority level (HIGH: "high-value customers at risk, VIP
+customers with issues, ... early churn signals"; LOW: "inactive customers with
+low engagement" ...); a concrete output example (decision "HIGH_PRIORITY",
+confidence 0.85); and a key_factors instruction capped at "2-3 field names"
+with the example ["total_spend", "churn_risk_score"]. key_factors was added to
+1a (commit e6e7992) specifically for 1a's H4, the field-importance hypothesis
+whose top 5 H1 now uses. 1a_RESULTS.md limitation 7 already names the
+priority-level examples as a possible implicit constraint ("a prompt controlled
+rerun is planned"): the 1b agent is that rerun, and the 1b docstring records
+the principle. I found no transcript discussion of the key_factors lines
+specifically; the current wording completes the removal of example values from
+the output format.
+
+**Evidence on contamination, from 1a's own results.** 1a's top 5 (identical at
+all eight duplication levels): last_purchase_days_ago, churn_risk_score,
+nps_score, lifetime_value_estimate, support_tickets_open. The key_factors
+example named total_spend (NOT in the top 5: evidence against strong
+anchoring) and churn_risk_score (rank 2: ambiguous, since it is also an
+obvious driver). The priority-level examples use vocabulary (risk, value,
+issues, inactivity) that loosely maps onto four of the five, but those are
+also the obvious drivers of any prioritization; the two cannot be separated
+from 1a's data. Conclusion: contamination is possible, not demonstrated.
+
+**What H1 depends on.** H1's five individual conditions and Question A use 1a's
+list. The revealed-importance measurement (drift when each field is dithered) is
+valid however the list was chosen. What the instrument change affects is the
+claim that the list is "the agent's self-report": the 1a list was produced
+under a prompt with leading examples, the 1b baseline will produce its own
+under the clean prompt. That second ranking is free (key_factors is in every
+baseline decision).
+
+**Proposal (to pre-specify BEFORE the baseline run):** (1) report the overlap
+between 1a's top 5 and the 1b baseline's top 5 and top 8 by citation rank
+(rank, not share: with no cap the 1b agent cites more fields), plus a rank
+correlation over all fields; (2) a conditional rule: if at most 2 of 1a's top
+5 are in the 1b baseline top 5, add up to 2 individual conditions for the
+highest-cited 1b fields not already dithered (cost about $5), generated from the
+stored canonical_customers.json as check_and_generate_h8b.py already does for
+H8b, so the date-of-birth drift cannot affect them; Question A is then reported
+on both lists, the 1b list primary. Selection uses only clean-baseline
+citations, independent of any drift outcome, so it adds no forking path.
+The overlap thresholds are the owner's call. Without the conditional rule,
+Question A stands as designed, worded as a replication under a changed
+instrument.
+
+## Agent patch and redundancy-table update (done; hashes recorded)
+
+**business_decision_agent.py** (patched; hash e647f56b543c5c67; was 07a86297d669948e).
+SYSTEM_PROMPT is byte-identical. Changes: `--max_records` now works (only the
+first N input records are considered); new `--resume` (keeps valid decisions
+already in the output, sends only missing records to the model, retries
+PARSE_ERROR lines and a truncated last line, writes one line per record; refuses,
+leaving the file untouched, if any kept decision was made on different input
+(input_hash), if the file holds decisions outside the current window, or if
+record_ids repeat); overwriting an existing output without --resume now prints
+a warning; the summary adds resumed_records, processed_this_session and
+session_cost_usd (total_records and total_cost_usd keep their meaning); the
+module docstring records the output-format differences from 1a. Tested offline
+against the real base agent with the model call faked: 17 checks, including a
+regression showing identical decision lines to the original file with no new
+flags, crash-then-resume equal to an uninterrupted run, and the CLI flags; the
+suite was mutation-tested (5 deliberate bugs, all caught).
+
+**field_redundancy.py** (hash 677461949c0f6ee4; was aa603194c23023cc). New column and
+verification: the value range the agent's prompt states per field (nps_score
+0-10; email_open_rate, churn_risk_score, fraud_risk_score 0.0-1.0; none for
+the rest), parsed from business_decision_agent.py and checked against clean
+generated data; 5 sabotage tests all caught. Note: this module reads the agent
+file from its own directory.
+
+**Verified shared agent files:** base_agent.py (7b1b8f58...) and
+llm_factory.py (a2633dd5...) match my copies, so the retry behavior described
+earlier (3 attempts, 1-2 s backoff, then raise) is the repo's actual behavior.
+
+## Amendment checklist: additions
+
+6. Document the differences from 1a's prompt (priority-level examples removed;
+   key_factors cap and example removed; output-format example values removed),
+   and that key_factors comparisons with 1a are by rank only.
+7. H5 wording: detection is measured under a prompt that tells the agent fields
+   can conflict ("If certain fields suggest conflicting priorities...").
+8. H1: the baseline replication rule above (decision pending).
+9. Freeze list to record before the full run (hash each): agent file,
+   generator, engine, field_redundancy.py, classifier prompt (v3-be665399de).
+10. Date-of-birth reproducibility: guard in generate_dithered_data.py, or the
+    procedure (generate once). Conditional conditions must load the stored
+    canonical file.

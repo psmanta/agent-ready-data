@@ -19,6 +19,15 @@ also changed the field documentation, any difference in field
 reliance could not be cleanly attributed to prompt design vs. field
 description changes.
 
+Output-format instructions, versus 1a: 1a asked for "the 2-3 field names that
+most influenced your decision" and showed concrete example values in its
+output format (a key_factors example of ["total_spend", "churn_risk_score"], a
+decision of "HIGH_PRIORITY", a confidence of 0.85). 1b gives no cap on
+key_factors and no example values anywhere in the output format, extending the
+no-illustrative-examples principle above to the output schema. Consequence:
+key_factors self-citation counts are comparable to 1a's by rank order only,
+not by absolute rate (with no cap, decisions cite more fields).
+
 Critical methodology note — H5 (Detection Awareness):
 This prompt makes no reference to data quality, consistency, accuracy,
 testing, or evaluation of any kind. The agent is framed exclusively as
@@ -193,6 +202,14 @@ class BusinessDecisionAgent(BaseExperimentAgent):
         )
         self.system_prompt = SYSTEM_PROMPT
 
+    @staticmethod
+    def _input_hash(record: Dict[str, Any]) -> str:
+        """md5 of the record exactly as the agent sees it (record_id excluded)."""
+        display_record = {k: v for k, v in record.items() if k != "record_id"}
+        return hashlib.md5(
+            json.dumps(display_record, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
     def make_decision(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Make a prioritization decision for a single customer record.
@@ -214,9 +231,7 @@ class BusinessDecisionAgent(BaseExperimentAgent):
 
 Respond with ONLY the JSON object described in your instructions. No other text."""
 
-        input_hash = hashlib.md5(
-            json.dumps(display_record, sort_keys=True, default=str).encode()
-        ).hexdigest()
+        input_hash = self._input_hash(record)
 
         response = self._invoke_llm(
             system_prompt=self.system_prompt,
@@ -251,44 +266,114 @@ Respond with ONLY the JSON object described in your instructions. No other text.
         }
         return result
 
-    def process_file(self, input_path: Path, output_path: Path) -> Dict[str, Any]:
+    def process_file(self, input_path: Path, output_path: Path,
+                     max_records: int = None, resume: bool = False) -> Dict[str, Any]:
         """
-        Process all records in a JSONL file, one at a time, no memory
-        between records. Writes decisions to output_path as JSONL.
-        Returns a summary dict.
+        Process records in a JSONL file, one at a time, no memory between
+        records. Writes decisions to output_path as JSONL. Returns a summary dict.
+
+        max_records: only the first N input records are considered.
+
+        resume: continue an interrupted run. Valid decisions already in
+        output_path are kept and only the missing records are sent to the model;
+        PARSE_ERROR lines and a truncated last line are retried. A kept
+        decision must have been made on the identical input (input_hash), and
+        every decision in the file must belong to the current input window;
+        otherwise nothing is touched and a ValueError is raised, because mixing
+        decisions made on different inputs would silently corrupt a condition.
+        Without resume the output is overwritten, as before (with a warning).
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        total_cost = 0.0
-        total_records = 0
-        errors = 0
-
-        with open(input_path) as infile, open(output_path, "w") as outfile:
+        records = []
+        with open(input_path) as infile:
             for line in infile:
                 if not line.strip():
                     continue
-                record = json.loads(line)
+                records.append(json.loads(line))
+                if max_records is not None and len(records) >= max_records:
+                    break
+
+        kept: Dict[str, Dict[str, Any]] = {}
+        mode = "w"
+        if resume and output_path.exists():
+            ids = [r.get("record_id", "UNKNOWN") for r in records]
+            if len(set(ids)) != len(ids):
+                raise ValueError("resume requires unique record_ids in the input")
+            expected = {r.get("record_id", "UNKNOWN"): self._input_hash(r) for r in records}
+            outside = 0
+            with open(output_path) as f:
+                for line in f:
+                    try:
+                        prior = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # truncated final line from an interrupted write
+                    rid = prior.get("record_id")
+                    if prior.get("business_decision") in (None, "PARSE_ERROR"):
+                        continue
+                    if rid not in expected:
+                        outside += 1
+                        continue
+                    if prior.get("input_hash") != expected[rid]:
+                        raise ValueError(
+                            f"resume refused: the decision for {rid} was made on different "
+                            f"input than the current file. Delete {output_path.name} to "
+                            f"start over; nothing was changed."
+                        )
+                    kept[rid] = prior
+            if outside:
+                raise ValueError(
+                    f"resume refused: {output_path.name} holds {outside} decision(s) for "
+                    f"records outside the current input window (is --max_records smaller "
+                    f"than the earlier run?). Nothing was changed."
+                )
+            # Keep only valid decisions, in input order: retried and missing
+            # records are appended, so no record appears twice.
+            tmp = output_path.with_suffix(output_path.suffix + ".resume_tmp")
+            with open(tmp, "w") as f:
+                for r in records:
+                    rid = r.get("record_id", "UNKNOWN")
+                    if rid in kept:
+                        f.write(json.dumps(kept[rid], default=str) + "\n")
+            tmp.replace(output_path)
+            mode = "a"
+        elif output_path.exists() and output_path.stat().st_size > 0:
+            print(f"    WARNING: overwriting existing {output_path.name}; "
+                  f"use --resume to continue an interrupted run instead")
+
+        session_cost = 0.0
+        processed = 0
+        errors = 0
+
+        with open(output_path, mode) as outfile:
+            for record in records:
+                if record.get("record_id", "UNKNOWN") in kept:
+                    continue
                 result = self.make_decision(record)
 
                 outfile.write(json.dumps(result, default=str) + "\n")
                 outfile.flush()
 
-                total_records += 1
+                processed += 1
                 if result.get("cost_usd"):
-                    total_cost += result["cost_usd"]
+                    session_cost += result["cost_usd"]
                 if result.get("business_decision") == "PARSE_ERROR":
                     errors += 1
 
-                if total_records % 50 == 0:
-                    print(f"    Processed {total_records} records "
-                          f"(${total_cost:.4f} so far)...")
+                if processed % 50 == 0:
+                    print(f"    Processed {processed} records "
+                          f"(${session_cost:.4f} so far)...")
 
+        prior_cost = sum((d.get("cost_usd") or 0.0) for d in kept.values())
         summary = {
             "input_file":    str(input_path),
             "output_file":   str(output_path),
-            "total_records": total_records,
+            "total_records": len(kept) + processed,
+            "resumed_records": len(kept),
+            "processed_this_session": processed,
             "errors":        errors,
-            "total_cost_usd":round(total_cost, 4),
+            "total_cost_usd": round(prior_cost + session_cost, 4),
+            "session_cost_usd": round(session_cost, 4),
             "model":         self.model,
             "temperature":   self.temperature,
             "timestamp":     datetime.now().isoformat(),
@@ -318,7 +403,10 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0,
         help="Sampling temperature (default: 0.0, required for baseline)")
     parser.add_argument("--max_records", type=int, default=None,
-        help="Limit records processed, for testing")
+        help="Only the first N input records are considered, for testing")
+    parser.add_argument("--resume", action="store_true",
+        help="Continue an interrupted run: keep valid decisions already in the "
+             "output file, send only the missing records to the model")
 
     args = parser.parse_args()
 
@@ -332,6 +420,9 @@ def main():
     print(f"Output:      {output_path}")
     print(f"Model:       {args.model}")
     print(f"Temperature: {args.temperature}")
+    print(f"Resume:      {'yes' if args.resume else 'no'}")
+    if args.max_records is not None:
+        print(f"Max records: {args.max_records}")
     print()
 
     if not input_path.exists():
@@ -344,14 +435,18 @@ def main():
     )
 
     print("Processing records...")
-    summary = agent.process_file(input_path, output_path)
+    summary = agent.process_file(input_path, output_path,
+                                 max_records=args.max_records, resume=args.resume)
 
     print(f"\n{'='*60}")
     print(f"DONE")
     print(f"{'='*60}")
-    print(f"Records processed: {summary['total_records']}")
+    if args.resume:
+        print(f"Resumed (kept):    {summary['resumed_records']}")
+    print(f"Records processed: {summary['processed_this_session']}")
+    print(f"Records in file:   {summary['total_records']}")
     print(f"Errors:            {summary['errors']}")
-    print(f"Total cost:        ${summary['total_cost_usd']}")
+    print(f"Cost this session: ${summary['session_cost_usd']}")
     print()
 
     return 0
