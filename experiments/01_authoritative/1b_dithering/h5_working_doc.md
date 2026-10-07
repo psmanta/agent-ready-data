@@ -1092,3 +1092,95 @@ dithered field; redundant siblings present in the record; whether the engine
 propagates the corruption to them. Derived from the generator's field
 relationships and the engine's propagation list, never from which fields
 produced detections.
+
+## Repo vs. sandbox sync check: generator, engine, and a date-dependence finding
+
+**Hash comparison (repo vs. my copies).** `validate_dama_dimensions.py` and
+`generate_dithered_data.py` matched. The generator differed (709 vs. 704
+lines) but only in the module docstring (a note about the post-1a refactor):
+no code difference, so every earlier check against the field relationships
+stands. The engine did NOT match: the repo's was the pre-isolated-arm version
+(1,182 lines, hash 5d1b0982..., byte-identical to my earlier copies), so the
+isolated-churn conditions never reached the repo engine even though the
+amendment, `generate_dithered_data.py` and the commit message said 55
+conditions; on the repo it built 53. Fix: replace it with the current engine
+(1,208 lines, hash 917cf4e3b4ad452c): the isolated arm plus a stale
+header-comment correction ("H4 reduced from 6 to 3", "Total: 50-51" ->
+"55-56"). Verified: code identical outside comments; builds 55 conditions.
+
+**Equivalence check.** All 55 conditions regenerated at n=60, seed 42, with the
+repo's generator and the updated engine: 110 files byte-identical to the
+earlier verified run once Faker's clock was pinned (see below).
+
+**Finding: regenerated data is not reproducible across calendar dates.**
+Faker's `date_of_birth` is computed relative to today's date, so the same seed
+gives different `dob` values on different days (observed: shifted by exactly
+the two days elapsed, in all 60 records; nothing else differed). The agent
+sees `dob`. Every invocation of `generate_dithered_data.py`, including
+`--baseline-only` and `--condition X`, regenerates the base customers and
+overwrites the baseline input and `canonical_customers.json`. Consequences if
+unaddressed: a baseline generated on one day and conditions generated on
+another differ in `dob` (so "differs only in the dithered field" fails
+slightly, for a field no hypothesis targets); a single condition regenerated
+later is inconsistent with its siblings; the saved canonical file may not match
+what the agent saw. The effect on decisions is almost certainly negligible; the
+provenance problem is not. **Procedure until a code fix is decided:** generate
+the baseline and all conditions in ONE invocation on one day, archive
+`canonical_customers.json` with its hash, and never rerun any generation
+command afterwards. The baseline-first gate is a gate on agent calls, not on
+generation, so this costs nothing. Candidate code fix (decision pending): a
+guard in `generate_dithered_data.py` that aborts when a stored canonical file
+exists and the regenerated base differs, unless `--force-regenerate` is passed.
+Changing how the generator produces `dob` is NOT recommended: it risks
+shifting the random stream for every later field.
+
+## Redundancy table (field_redundancy.py): DRAFT, pending review before freeze
+
+Pre-specified table of which dithered fields have a cross-checkable sibling and
+whether the engine removes the contradiction. Derived only from the
+generator's formulas and the engine's propagation list. Tiers: **strict**
+(exact deterministic function), **bounded** (hard constraint inferable from
+what the fields mean), **approximate** (formula with a bounded random factor),
+**soft** (a hard band by `customer_segment` in the generator, never stated to
+the agent), none. "Class" = strongest tier among siblings the engine does NOT
+recompute; reported for default conditions (recompute_derived=True) and for
+the isolated arm (False).
+
+Results that matter for H4: `tenure_months` is strict in both (uncorrected
+`account_created_date`); `total_spend` is approximate in both (lifetime value;
+purchases x average order value); `churn_risk_score` is **soft_only in the
+default arm** (the engine rewrites the strict sibling `is_at_risk`) and
+**strict in the isolated arm**: exactly the manipulation the isolated arm
+exists to test. `support_tickets_open` behaves the same way (bounded by
+default, strict isolated). Found by reading the generator, not previously
+noted: `email` is derived from `name`, a strict pair, so `h1_individual_email`
+dithers one half of a strict relationship (a cheap natural detection test).
+Seven fields have no link at all (acquisition_channel, phone, address,
+refund_rate, avg_resolution_time_hours, has_pending_order,
+has_active_subscription): natural negative controls.
+
+**Verification:** 21 relationships checked over 3,000 generated customers (no
+failures; observed spend ratio 0.900-1.100 and LTV/spend 0.80-4.00 match the
+stated bands); the engine probed on all 25 fields (changes exactly the field
+plus the declared propagation, nothing else; declared propagations actually
+occur); within-segment independence of the unlinked numeric fields (worst
+|rho| about 0.10, threshold 0.20). The verifiers were sabotaged seven ways
+(wrong rule, wrong band, wrong LTV band, missing propagation, phantom
+propagation, stale field list, a hidden correlation); each was caught.
+
+**Caveat:** direction matters. Strict relations expose every change; bounded,
+approximate and soft ones expose a corruption only when it pushes the value
+outside the allowed region (support_tickets_open dithered downward never
+violates closed >= open). The table says which siblings exist, not that every
+corruption is exposed.
+
+**Freeze rule:** after review, record the module's hash here and in the
+amendment; never edit the table after seeing which fields produced detections.
+Because it covers all 25 dithered fields, the redundancy hypothesis can also
+be examined across H1-H3 (exploratory): detection rate by class.
+
+**Open review questions:** (1) Should `soft` count as redundancy? Recommendation:
+primary stratification groups {strict, bounded, approximate} against
+{soft_only, none}, with soft_only reported separately. (2) The spend triad
+lists all three fields as one another's approximate siblings; confirm.
+(3) Whether to pre-specify the `none` fields as negative controls.

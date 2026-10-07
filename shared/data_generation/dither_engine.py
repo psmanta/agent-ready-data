@@ -768,11 +768,12 @@ class DitherEngine:
 # PREDEFINED CONDITIONS — maps to 1b hypotheses, per 1b_DESIGN_AMENDMENT_1.md
 # ============================================================================
 #
-# Condition counts per the amendment (H4 reduced from 6 to 3 — see below):
+# Condition counts per the amendment:
 #   H1: 14   H2: 12   H3: 15   H4: 8   H7: 4   H8a: 2   H8b: 0-1 (conditional)
-#   Total: 50-51 (H1 +2 comparison fields; H3 +4 after the field-composition
+#   Total: 55-56 (H1 +2 comparison fields; H3 +4 after the field-composition
 #   correction, the payment_failures individual condition, and the reference
-#   sets gaining the correlated arms the GEE DiD requires)
+#   sets gaining the correlated arms the GEE DiD requires; H4 6 -> 8 with the
+#   isolated-corruption churn arm)
 
 def build_h1_conditions(seed: int = 42) -> List[DitherConfig]:
     """
