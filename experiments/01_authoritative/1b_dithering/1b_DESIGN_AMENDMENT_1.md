@@ -912,6 +912,41 @@ more detection could lower drift, or detection could fail to protect (one
 stable customer in the first smoke run detected the problem and still
 drifted).
 
+### Garbage-filter analysis: what is pre-specified
+
+The drift-rate contrasts above say WHETHER agents are less disrupted by
+implausible values; the garbage-filter analysis asks WHY: did the agent
+notice, silently repair, or blindly absorb? For each field and arm (drift,
+plausible, implausible, and for churn the two isolated arms) it reports, per
+stability stratum, the drift rate, the keyword-scan detection rate, drift by
+detected / not detected, drift by echo class, and (once the human audit has
+calibrated the judge) drift by the judge's category.
+
+**Strata.** "Stable" customers are the primary stratum: a boundary customer
+flips at its own clean rate (a deeply_boundary customer about 40% of the time
+with no corruption), so reading its drift as a corruption effect contaminates
+the signal. "Boundary" customers (lightly_boundary, deeply_boundary,
+tied_no_majority) are reported separately, never discarded, because H6 asks
+about them directly and dropping them changes the estimand. "All" is also
+reported.
+
+**Pre-specified primary tests (fixed before the full run), paired exact
+McNemar's, two-sided.** Two families, corrected separately by Holm: keyword
+detection, and (once validated) judge `explicit_concern`. Each family holds
+five tests, all predicting the same direction (more detection in the first
+arm named): (1-3) the detection spike per field, implausible vs. plausible,
+stable customers; (4-5) the isolation comparison per plausibility,
+isolated vs. propagated, contradiction-carrying stable customers. Every
+other comparison (drift, other strata, echo-class and judge-category
+cross-tabs, the input-identical negative control) is exploratory and labeled
+as such in the output. Raw 2x2 counts are always reported next to each
+p-value, with a `low_power` flag below 10 discordant pairs, because rare
+events make most of these comparisons underpowered.
+
+**Provisional instruments.** The keyword scan is anywhere-in-text and cannot
+say which field was doubted. Judge-derived results are provisional until the
+human audit calibrates the judge (see the H5 section).
+
 ### Condition set (8 total)
 
 `h4_churn_risk_score_plausible`, `h4_churn_risk_score_implausible`,

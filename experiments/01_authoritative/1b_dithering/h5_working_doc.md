@@ -1523,3 +1523,90 @@ total_spend / churn_risk_score anchoring look. (2) evaluate_h1.py still to be
 built against the manifest. (3) Amendment: the rule text, the manifest, the
 group definitions (including the payment_failures note), the frozen constants
 (now including LEGACY_COMPARISON).
+
+
+## Amendment state, verified against the repo; CORRECTIONS to earlier entries in this document
+
+**Method.** Every markdown file in the repo was hashed and matched against the copies available to the
+assistant. Current (byte-identical to the project copy): this working doc (its outputs copy), 1b_DESIGN.md,
+statistical_methodology_note.md, 1a_RESULTS.md, RESEARCH_NOTES.md. NOT current: the amendment held in the
+project knowledge (74,627 B, hash 4627df8c...), which is stale.
+
+**The amendment has three versions.** Repo: 0d53b610... (92,785 B). Outputs copy: a657c257... (94,869 B).
+Project: stale. The repo version equals the outputs copy in 17 of 18 sections; the only difference is a
+35-line subsection of H4, "Garbage-filter analysis: what is pre-specified", present in the outputs copy and
+ABSENT from the repo. It was written in an earlier session and never committed. **Action: replace the repo
+amendment with the outputs copy and commit it before the baseline runs** (a pre-registration is only as good as
+its commit timestamp).
+
+**Corrections.**
+1. The checklist entry "H4 statistical plan: pre-specified primary tests ... not yet pre-specified anywhere"
+   is WRONG for the outputs copy: that subsection already pre-specifies them, exactly as the code tags them:
+   two Holm-corrected families (keyword detection; judge explicit_concern once validated), five paired exact
+   McNemar tests each (three detection spikes on stable customers, two isolation comparisons on
+   contradiction-carrying stable customers), everything else exploratory, raw 2x2 counts with a low_power flag
+   below 10 discordant pairs. The only gap was that the commit never happened.
+2. The claim "the amendment's H5 section lists 17 patterns where the code has 25" came from the stale project
+   copy. The repo's H5 section (identical to the outputs copy) already says 25. What it really lacks: the
+   adverb-form patterns, the echo check, the clean-baseline floors, the three-category judge (v3), and
+   everything decided since.
+3. The six Question A comparison fields frozen in the manifest tooling were taken from the stale copy; the H1
+   section is identical in all three versions, so the constant is correct.
+
+**Edit documents** (h3_edits, h3_engine_fix_edits, h3_full_refresh, h4_amendment_edits, h6_rewrite,
+boundary_addendum, gee_methodology_note, h4_working_doc) exist only in the assistant's sandbox, not in the
+repo. A near-verbatim sample against the outputs amendment: h6_rewrite 92% present, h3_full_refresh 82%,
+h3_engine_fix_edits 60%, h4_amendment_edits 29% (edit-instruction text, but the H4 substance is in),
+boundary_addendum 0% (appears NOT folded), this working doc 0% (expected). This is a weak proxy; the fold-in
+ledger settles it. After the amendment is committed, refresh the project knowledge copy (stale files are
+what misled this analysis).
+
+## H1 evaluator extension: built and verified
+
+**What it does.** evaluate_h1.py takes `--manifest` (default
+experiments_output/evaluation/h1_replication_manifest.json) and `--allow_incomplete_1b`.
+- Question A's method is now generic (`_question_a`); the legacy list runs exactly as before.
+- With a manifest it first VERIFIES: decision_sha256 (refuses an edited manifest); that the five baseline run
+  files, the baseline input and canonical_customers.json are unchanged since the freeze (names the file that
+  changed); and that the manifest's legacy groups equal the evaluator's own TOP5_FIELDS/COMPARISON_FIELDS (two
+  sources must not disagree). It never re-derives the trigger or the groups.
+- Trigger fired: Question A on the 1b list is PRIMARY (group-level exact Mann-Whitney on exposure-adjusted rates
+  plus every pairwise exact McNemar over customers perturbed in both conditions, as for the legacy list), plus
+  the pre-registered sensitivity analysis without comparison fields at raw 1b ranks 6-8. The legacy list is
+  reported as the "legacy comparison". The new conditions' decisions must exist: otherwise the run is REFUSED,
+  naming them, unless `--allow_incomplete_1b` (status "incomplete", legacy analysis intact).
+- Not triggered: 1b section = "not_triggered"; legacy list primary. No manifest: 1b section = "skipped: no
+  manifest", with a printed warning; everything else unchanged.
+- Stated-vs-revealed (approved: report on both lists, 1b primary when triggered): legacy rows are unchanged and
+  gain `manifest_citation_rate`; when triggered, `top5_comparison_1b` rows take their stated rate from the
+  manifest's citation table. NOTE the two stated-importance instruments differ: the legacy rows count raw
+  key_factors strings from baseline_reference.json; the manifest counts exact schema matches once per decision.
+  Both are shown side by side so any disagreement is visible.
+- validate_h1_schema.py (new): structural, blind to meaning; checks group sizes against pair counts, win counts,
+  ranges, the manifest status against the 1b section it governs, and the hash link.
+
+**Verification.** 24 check groups with every number recomputed independently (effective rates, exact
+Mann-Whitney, all pairwise exact McNemar tests, win counts, the sensitivity analysis, the stated-vs-revealed
+rows). Regression: against the ORIGINAL evaluator on identical data every legacy output key is byte-identical
+with no manifest, and all but the additive stated-importance rows with one; the only new keys are
+question_a_manifest and question_a_1b_list. 13 deliberate bugs (wrong comparison group, verification skipped,
+pairs not restricted to perturbed-in-both, wrong sensitivity group, trigger ignored, missing-conditions guard
+removed, stated rate not from the manifest, legacy output altered, input-hash check skipped, legacy-group
+cross-check dropped, raw drift reported as effective, two validator checks disabled) were each caught. The suite
+found one real bug on its first run (`--allow_incomplete_1b` crashed building 1b stated-importance rows for a
+condition deliberately not loaded); fixed, and the validator learned the "incomplete" state.
+
+Hashes: evaluate_h1.py 1b9e90ff00ba8a5e (was 5dccc5ec2451d6df); validate_h1_schema.py
+7905dfaa19dd437e; test_evaluate_h1_manifest.py 6e4668bb299ca6cf.
+
+## Status of the pre-run list (as of this entry)
+
+Done and verified: engine (55 conditions), generator check, redundancy table (DRAFT, review pending), agent
+resume/max_records, H1 replication tooling, H1 evaluator extension, garbage-filter analysis.
+Open before the full run: commit the outputs-copy amendment; the fold-in ledger and amendment pass (including
+the H5 rewrite and plans for H5-H8); the dob guard decision; the redundancy-table review (3 questions) and
+freeze; a durable test for the agent's resume mode (the earlier suite was lost with the sandbox); the free
+rehearsal of h1_baseline_replication.py on the n=30 smoke baseline (unmatched share of real key_factors; use a
+scratch --out path, the manifest is write-once); a dress rehearsal. Evaluators for H5, H6, H7 and H8 do not
+exist yet. Post-run: human audit, echo x drift cross-tab, blind vs range-informed judge variant, omission
+pairing, the optional 1a anchoring look.
