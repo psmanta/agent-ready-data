@@ -1330,3 +1330,196 @@ earlier (3 attempts, 1-2 s backoff, then raise) is the repo's actual behavior.
 10. Date-of-birth reproducibility: guard in generate_dithered_data.py, or the
     procedure (generate once). Conditional conditions must load the stored
     canonical file.
+
+## H1 conditional replication rule: DRAFT, pending approval of the changes marked (*)
+
+Owner decisions so far: write a conditional rule into H1 now; trigger = top-5
+overlap of at most 2. Pre-registration holds only once this text is in the
+committed amendment BEFORE the 1b baseline starts (record the commit hash).
+
+**Instrument.** key_factors from every baseline decision (5 runs x all
+customers). A cited item counts only if it exactly matches a schema field name
+(case-insensitive, trimmed); other items are not assigned and the unmatched
+share is reported. (*) Citation rate of a field = fraction of decisions citing
+it. Rank by rate; ties broken alphabetically; the rate margin between ranks 5
+and 6 is reported.
+
+**Always reported.** Top-5 and top-8 overlap with 1a's list (last_purchase_days_ago,
+churn_risk_score, nps_score, lifetime_value_estimate, support_tickets_open);
+Spearman rank correlation over every field cited in either; (*) a bootstrap over
+customers (all of a customer's runs resampled together) giving the distribution
+of top-5 overlap and the probability it is at most 2. The bootstrap is context,
+not the trigger.
+
+**Trigger: point-estimate top-5 overlap of 0, 1 or 2.**
+- Overlap 3, 4 or 5: no change. Question A stands as designed, worded as a
+  replication under a changed instrument. A 1-2 field swap is expected variation
+  once the cap and the example field names are removed.
+- Overlap 0-2: add an individual condition, with the same parameters as the
+  existing twelve (15%, drift, correlated, recompute on), generated from the
+  stored canonical_customers.json (as check_and_generate_h8b.py does), for
+  every field in the 1b top 5 that does not already have one. (*) This is up to
+  5 new conditions, not 2 (about $2.30 each at standard pricing, so at most
+  about $12; roughly half on Batch). Twelve fields already have a condition and
+  are reused for free: the five from 1a, email, is_vip, total_spend,
+  tenure_months, avg_resolution_time_hours, refund_rate, payment_failures. A
+  field the engine cannot dither (customer_segment, is_at_risk,
+  recently_contacted_support, date fields) is skipped and the next eligible
+  field takes its place; the skipped fields are reported. (*)
+- Question A is then reported on both lists. The 1b list is primary; the 1a list
+  is the legacy comparison. (*) For the 1b list the comparison group is the
+  existing individual conditions for fields outside the 1b top 5, with a
+  sensitivity analysis that also excludes fields ranked 6-8. Same tests as the
+  existing plan (group-level Mann-Whitney secondary; pairwise comparisons).
+
+**Wording of the rationale (*).** Low overlap means the 1a list does not
+reproduce under the 1b instrument. It does not prove the example names caused
+the difference: the instrument changed in several ways at once (priority-level
+examples, output example values, the key_factors cap and example, different
+customers). Likewise, overlap of 3 or more shows the list survived; it does not
+show 1a was uncontaminated. False triggers are cheap and missed triggers weaken
+H1, so a threshold at 2 is reasonable.
+
+**Selection is independent of outcomes:** it uses only clean-baseline
+citations, never any drift result.
+
+**Why 5 and not 2 (correction to my earlier proposal).** Making the 1b list
+primary requires dithering every field on it. An overlap of exactly 2 leaves 3
+fields on the 1b top 5 that 1a never covered; a cap of 2 new conditions would
+leave the primary analysis incomplete.
+
+
+## H1 conditional replication rule: APPROVED; tooling built and verified
+
+**Status.** The owner approved the rule as drafted above, including every
+starred change (up to 5 new conditions, not 2; measurement definitions with
+tie-break, matching and eligibility; the bootstrap as context only; the
+comparison group for the 1b list; the softened rationale). The rule is
+pre-registered only once its text is in the COMMITTED amendment before the 1b
+baseline starts; record that commit hash.
+
+**Tooling** (hashes recorded for the freeze list):
+- `h1_baseline_replication.py` (68a4fd3f3475d2ee): counts key_factors citations across the
+  five baseline runs, ranks fields, reports top-5/top-8 overlap with 1a, where
+  each 1a field landed, a customer-level bootstrap, optional Spearman, applies
+  the trigger (point-estimate top-5 overlap <= 2), and lists the conditions to
+  add. Refuses a partial baseline. Records the hash of every run file and of
+  canonical_customers.json. Warns if dithered-condition decisions already
+  exist (the rule is meant to run before any).
+- `generate_h1_replication_conditions.py` (7aad6d324afce92e): generates one individual 15%
+  condition per entry, cloned from h1_individual_nps_score (only field, seed
+  and id differ), from the SAVED canonical customers (refuses if their hash
+  changed since the analysis: the date-of-birth hazard), using the main
+  generator's own validity check and record-id functions; cross-checks the
+  record_id set against an existing condition; never silently overwrites;
+  idempotent. Condition ids h1_replication_<field>; seeds 500-524, assigned
+  per field so they do not depend on the baseline outcome. Decisions go in
+  conditions/<id>/decisions.jsonl, where the evaluators read them.
+- `test_h1_replication.py` (7255ec45446f4e14): self-contained regression test (builds its
+  own 200-customer dataset in a temp directory; never touches real outputs).
+
+**Verification.** 37 check groups pass, every expected value recomputed
+independently with plain loops over exactly-planted citation counts: seven
+scenarios (overlap 5, 3, 2 with new fields, 2 fully covered, 2 with
+customer_segment/is_at_risk in the raw top 5, 0, and a three-way tie at rank
+5/6), the measurement rules, completeness refusals, bootstrap sanity, the CLI,
+and twelve generator checks. Ten deliberate bugs (trigger off by one,
+reversed tie-break, ineligible fields not skipped, covered fields re-added,
+cap of 2, case-sensitive matching, double counting, PARSE_ERROR not excluded,
+no canonical-hash check, silent overwrite) were each caught.
+
+**Frozen constants** (in the script; do not edit after the baseline runs):
+1a top 5 = last_purchase_days_ago, churn_risk_score, nps_score,
+lifetime_value_estimate, support_tickets_open; trigger overlap <= 2; top-5 and
+top-8; bootstrap B = 2000, seed 20261009; eligible = the 25 fields the engine
+can dither; 12 fields already have an individual 15% condition.
+
+**Sequence at the full run.** Generate everything once -> run the five baseline
+runs -> run h1_baseline_replication.py with --canonical -> if it fires, run
+generate_h1_replication_conditions.py and the agent on the new conditions ->
+continue with the dithered conditions.
+
+**Open items.**
+1. Spearman needs 1a's FULL ranking; 1a_RESULTS.md reports only its top 5. If
+   1a's decision files exist, one script can produce it (pass --a1a_ranking);
+   otherwise the report shows where each 1a field landed in the 1b ranking.
+2. evaluate_h1.py has not been extended: Question A on the 1b list (primary
+   when the rule fires), with the comparison group of existing individual
+   conditions outside the 1b top 5 and the sensitivity analysis excluding
+   ranks 6-8, still needs building.
+3. Amendment: fold in the rule text, the tooling, and the frozen constants.
+
+
+## H1 tooling v2: frozen manifest (response to the owner's review; SUPERSEDES the tooling description above)
+
+New hashes: `h1_baseline_replication.py` 2405ec63b09f7375; `generate_h1_replication_conditions.py` ca254aceb1e7eb27;
+`test_h1_replication.py` b70e70dde8a1f39c. The output file is now
+`h1_replication_manifest.json` (not h1_replication.json); the generator takes
+`--manifest`; rule_version h1-replication-v2.
+
+**The four edge cases raised, and the verdicts.**
+1. *Deterministic tie-breaking.* Already satisfied, and now demonstrated: ranking
+   is citation count DESC, field name ASC, and the sort key is now the integer
+   count (not a float rate). A three-way tie at rank 5/6 produced byte-identical
+   output under four different PYTHONHASHSEED values, and the suite does the same
+   with two seeds. No set or dict iteration order reaches any output.
+2. *Frozen manifest.* Adopted, and strengthened. The earlier output held most of
+   the requested content but was not frozen: it could be silently regenerated,
+   it carried machine-specific paths, and its bootstrap used NumPy's random
+   stream, which is not guaranteed stable across NumPy versions. Now: the
+   decision-bearing content (input hashes by file NAME, the complete citation
+   table including never-cited fields, overlap k, the trigger, the conditions to
+   add, and the pre-registered Question A groups) is covered by `decision_sha256`
+   (canonical JSON, no paths, no timestamps); the `context` block (bootstrap,
+   Spearman, cost estimate, sequencing warning) is outside it; the file is
+   write-once (identical re-run leaves it untouched, different content or a
+   hand-edited file is refused); the bootstrap uses Python's random.Random with
+   exact integer arithmetic; the same inputs give the same hash in a different
+   directory tree. The generator verifies the hash, refuses an edited manifest,
+   and writes `h1_replication_generated.json` (manifest hash, canonical hash,
+   hash of every generated file). **evaluate_h1.py must verify `decision_sha256`
+   and consume `question_a_groups`; it must never re-evaluate the trigger.**
+3. *"Ineligible" definition.* Two of three parts were already true; one is
+   rejected. Eligible = a field the engine can dither (the 25); the three
+   protected fields, dates, dob and preferred_categories are skipped, and the
+   skipped fields are reported (tested). The agent-visible schema excludes
+   record_id and every metadata field, so customer_id, record_id and _dither_*
+   can only ever be unmatched citations (tested). REJECTED: skipping fields
+   already in 1a's top 5. That would delete a surviving 1a field from the 1b list
+   and defeat the replication it measures. Eligibility (can it be dithered) is
+   deliberately separate from coverage (does it already have a condition): a
+   covered field stays on the 1b list and is reused at no cost.
+   Practical check: all 13 eligible fields that lack a condition pass the
+   generator's validity check, so nothing the rule can select will fail at
+   generation.
+4. *1a ranking without a full Spearman.* Agreed. The report now shows
+   "1a #k field -> 1b #m" for each of 1a's five, with the 1b rate. Spearman is
+   optional context. Optional extra: 1a's rank and rate for total_spend and
+   churn_risk_score, the two fields its key_factors example named, are the
+   cleanest available test of anchoring, if 1a's decision files can be found.
+
+**Question A groups, as encoded in the manifest.** Legacy 1a list: top = 1a's
+five; comparison = exactly the amendment's six (email, is_vip, total_spend,
+tenure_months, avg_resolution_time_hours, refund_rate). If the trigger fires:
+1b list (primary): top = the eligible 1b top 5; comparison = every existing
+individual condition outside that list; sensitivity = that comparison without
+fields at raw 1b ranks 6-8. Note: the 1b comparison group includes
+payment_failures and any 1a field that dropped out, neither of which is in the
+amendment's six; that follows from the approved rule ("existing individual
+conditions for fields outside the 1b top 5") and should be stated in the
+amendment.
+
+**Verification.** 52 check groups, expected values recomputed independently,
+now including the bootstrap replicated in plain Python (exact match on 5
+scenarios), the manifest's integrity, write-once and machine independence, the
+groups, and the generator's record. 19 deliberate bugs, all caught. The mutation
+testing exposed one weakness in my own suite: every scenario had margins so wide
+that the bootstrap gave the same answer under any seed, so a changed seed went
+unnoticed. A near-tie scenario (rank 5 vs rank 6) now makes the bootstrap vary,
+and a changed seed or wrong resampling is caught.
+
+**Open items.** (1) Optional: locate 1a's decision files for the
+total_spend / churn_risk_score anchoring look. (2) evaluate_h1.py still to be
+built against the manifest. (3) Amendment: the rule text, the manifest, the
+group definitions (including the payment_failures note), the frozen constants
+(now including LEGACY_COMPARISON).
