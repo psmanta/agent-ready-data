@@ -25,7 +25,7 @@ versus what we're choosing to defer.
 ## A Note on Prompt Continuity
 
 Before the hypothesis-by-hypothesis review, a full re-read of
-`business_decision_agent_1b.py`'s system prompt was necessary, prompted specifically by H5's
+`business_decision_agent.py`'s system prompt (the 1b agent; 1a's agent of the same name is a different file) was necessary, prompted specifically by H5's
 detection-awareness concerns, surfaced one line worth flagging that applies
 across multiple hypotheses rather than just one.
 
@@ -44,17 +44,23 @@ it does mean any "resolution behavior" observed in H3's uncorrelated arm is at
 least partly prompted rather than fully emergent, and this must be disclosed
 in H3's write-up.
 
+The same sentence is the one place in the prompt that tells the agent fields can conflict. It concerns priorities, not data validity, and it is identical in every condition, so it cannot bias any comparison. But the "organic" detection H5 measures is detection under a prompt that mentions conflicts between fields, and the write-up must say so.
+
 **"Business outcomes" is never defined anywhere in the prompt.** Revenue
 retention, support cost minimization, satisfaction, and long-term value could
 each imply different resolutions to a genuine conflict, and the agent is never
 told which one governs. This ambiguity is being left **unpatched**, fixing it
 would introduce a second deliberate prompt divergence from 1a beyond removing
-the illustrative examples, and unlike that removal (closing a documented 1a
+the leading examples (one divergence, applied consistently; see "Output-format differences from 1a" below), and unlike that removal (closing a documented 1a
 limitation), defining "business outcomes" would add information the agent
 never had in 1a, creating a fresh confound rather than resolving a bias. It is
 documented instead as a named limitation: the ambiguity existed in 1a but was
 inert there; H3's uncorrelated arm is the first place in the series that
 actually exercises it.
+
+**Output-format differences from 1a.** The principle that removed the illustrative priority-level examples also applies to the output format. 1a's prompt asked for "the 2-3 field names that most influenced your decision" and showed concrete example values (a `key_factors` example of `["total_spend", "churn_risk_score"]`, a decision of `HIGH_PRIORITY`, a confidence of 0.85). The 1b prompt gives no cap on `key_factors` and no example values anywhere in the output format. Consequences: `key_factors` self-citation counts are comparable to 1a's by rank order only, not by absolute rate (with no cap, decisions cite more fields); and H1's replication of 1a's self-reported importance is a replication under a changed instrument (see the H1 conditional rule). Nothing collected under any earlier wording may be pooled with runs under the current one. The system prompt is otherwise byte-identical to the version the agent file carried before these edits; the agent file's later changes (`--max_records` now honored; a `--resume` mode that keeps valid decisions made on identical input and refuses to mix decisions made on different input) do not touch it.
+
+**Stated ranges.** The prompt's field glossary states a value range for only four fields (`nps_score`, `email_open_rate`, `churn_risk_score`, `fraud_risk_score`). It also never describes three date fields the agent sees (`account_created_date`, `last_purchase_date`, `next_renewal_date`); the first two are strict siblings of `tenure_months` and `last_purchase_days_ago` (see the redundancy table under H4).
 
 ---
 
@@ -136,6 +142,14 @@ adjustment throughout.
 
 ---
 
+## A Note on Data Generation Reproducibility
+
+Faker computes `date_of_birth` relative to the current date, so the same seed produces different `dob` values on different calendar days (observed: every one of 60 records shifted by exactly the elapsed days, nothing else differing). The agent sees `dob`. Every invocation of `generate_dithered_data.py`, including `--baseline-only` and `--condition`, regenerates the base customers from the seed and overwrites the baseline input and `canonical_customers.json`. Left unmanaged, a baseline generated one day and conditions generated another would differ in a field no hypothesis targets, a single condition regenerated later would be inconsistent with its siblings, and the saved canonical file might not match what the agent saw. The effect on decisions is almost certainly negligible; the provenance problem is not.
+
+**Binding procedure.** (1) Generate the baseline and every condition in ONE invocation on one day. The baseline-first gate gates agent calls, not generation. (2) Record the sha256 of `canonical_customers.json` in the freeze manifest and in the H1 replication manifest. (3) Never rerun a generation command afterwards. (4) Conditional conditions (the H1 replication conditions, H8b) are generated from the stored canonical file and refuse to run if its hash changed. (5) An interrupted agent run continues with `--resume`, which keeps decisions already made on identical input and refuses to mix decisions made on different input. Changing how `dob` is produced is deliberately not done: it risks shifting the random stream for every field generated after it.
+
+---
+
 ## A Note on Statistical Methodology
 
 `evaluate_core.py` uses seven statistical tools across the evaluator. Each
@@ -190,6 +204,7 @@ function docstrings.
 |---|---|---|---|
 | Is it safe to report one pooled plausibility effect across all three H4 fields? | Fit the pooled model and trust its p-value | Verified by simulation: a pooled coefficient near zero (mean −0.09) was statistically significant in 19 of 20 replicates despite describing neither of two genuinely opposite-sign fields (+1.3 and −1.7) — the danger isn't a null result, it's a confident, misleading small effect | **A joint Wald test on each contrast's interaction with Field**, fit in the same model as the pooled contrasts. Fired on 20/20 opposite-sign replicates and 30/30 mild-heterogeneity replicates, while firing falsely in only 2/40 replicates under a genuine null — confirming it's calibrated, not just trigger-happy. When it fires, per-field contrasts are the primary report; the pooled number becomes a footnote. |
 
+**A thirteenth entry: a decision rule that is evaluated on data is frozen as a hashed manifest.** Several pre-registered rules are decision rules applied to data that does not exist yet (the H1 replication trigger; H8b's selection rule). A rule written only in prose can be applied with unrecorded discretion. The mechanism: the rule's inputs are hashed by file name, its output (the complete citation table, the overlap, the trigger, the conditions to add, the downstream analysis groups) is written once as canonical JSON covered by a `decision_sha256`, anything non-deterministic or advisory (a bootstrap, a cost estimate, a warning) sits in a `context` block outside the hash, and every downstream consumer verifies the hash and that the inputs are unchanged, and never re-derives the rule. The manifest contains no paths, timestamps or library-dependent randomness, so the same inputs give the same hash on any machine. Rank-stability bootstraps use Python's `random.Random` with integer arithmetic, and are context only. Rare binary events (detection) are tested with paired exact McNemar tests in pre-specified Holm families of five, with the raw 2x2 always reported and a `low_power` flag below 10 discordant pairs. A pre-specified comparison is tagged `primary` in the output and no other test may carry that tag.
 
 ## Forward-Looking Note: Paired Comparisons Beyond H1/H3
 
@@ -417,6 +432,24 @@ importance) against actual drift rate when that field is dithered (revealed
 importance, from the five individual conditions) tests whether the agent's
 self-report about its own reasoning predicts what actually changes its
 decisions. Zero additional API calls required.
+
+### Conditional replication rule (pre-registered before the baseline runs)
+
+**Why it exists.** Question A's five "top" fields are 1a's self-reported top 5 (its H4): `last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate` and `support_tickets_open`. 1a measured that self-report under a prompt that contained leading examples: illustrative descriptions for each priority level, a concrete output example (a decision of `HIGH_PRIORITY`, a confidence of 0.85), and a `key_factors` instruction capped at "2-3 field names" with the example `["total_spend", "churn_risk_score"]`. The 1b agent's prompt contains none of these (see "A Note on Prompt Continuity"), so 1b's own baseline yields a cleaner self-report. Question A's drift measurement is valid however the five fields were chosen; what the instrument change puts at risk is the claim that the list is "the agent's self-report." The evidence in 1a's own results is mixed: `total_spend`, named in the example, never reached 1a's top 5, while `churn_risk_score`, also named, ranked second (and is an obvious driver regardless). Contamination is possible, not demonstrated. `key_factors` is present in every baseline decision, so testing it costs no API calls.
+
+**Measurement (frozen).** From every baseline decision (5 runs per customer): a cited item counts only if, trimmed and lowercased, it exactly matches a schema field name (the fields the agent sees, minus `record_id`); anything else is unmatched, assigned to no field, and its share is reported. A field counts at most once per decision. `PARSE_ERROR` decisions and decisions whose `key_factors` is not a list are excluded and counted. Fields are ranked by integer citation count, descending, ties broken by field name, ascending (strictly deterministic); the rate margin between ranks 5 and 6 is reported. Fields the engine cannot dither (`customer_segment`, `is_at_risk`, `recently_contacted_support`, dates, `dob`, `preferred_categories`) are skipped in rank order until five eligible fields are found, and the skipped fields are reported. Eligibility (can the field be dithered) is deliberately separate from coverage (does it already have a condition): a 1a field that survives into the 1b top 5 stays on the list and is reused at no cost.
+
+**Always reported (context, not the trigger).** Top-5 and top-8 overlap with 1a's list; where each of 1a's five landed ("1a #1 `last_purchase_days_ago` -> 1b #k"); a bootstrap over customers (B = 2000, seed 20261009, all of a customer's runs resampled together, Python's `random.Random` with exact integer arithmetic so it is reproducible across library versions); and a Spearman correlation only if a full 1a ranking exists (1a reports only its top 5, so it normally cannot be computed).
+
+**Trigger: point-estimate top-5 overlap of 0, 1 or 2.**
+- **Overlap 3, 4 or 5:** no change. Question A stands as designed, worded as a replication under a changed instrument. A one- or two-field swap is expected once the cap and the example field names are removed.
+- **Overlap 0-2:** add an individual condition, with exactly the parameters of the existing twelve (15% magnitude, drift, correlated, `recompute_derived` on), for every field in the eligible 1b top 5 that does not already have one: up to five new conditions, named `h1_replication_<field>`, seeds 500-524 assigned per field (so they do not depend on the baseline outcome), generated from the stored `canonical_customers.json`. Twelve fields already have such a condition and are reused: 1a's five (`last_purchase_days_ago`, `churn_risk_score`, `nps_score`, `lifetime_value_estimate`, `support_tickets_open`), `email` and `is_vip` (H1), `total_spend` and `tenure_months` (H2), and `avg_resolution_time_hours`, `refund_rate` and `payment_failures` (H3). Up to five new conditions rather than two, because the 1b list can only be primary if every field on it is dithered.
+
+**Question A reporting when the trigger fires.** The 1b list is primary and the 1a list is the legacy comparison. *Legacy groups:* top = 1a's five; comparison = exactly the six fixed above (`email`, `is_vip`, `total_spend`, `tenure_months`, `avg_resolution_time_hours`, `refund_rate`). *1b groups:* top = the eligible 1b top 5; comparison = every existing individual condition outside that list (this includes `payment_failures`, and any 1a field that dropped out, neither of which is among the six); sensitivity = that comparison without fields at raw 1b citation ranks 6-8. The tests are the same as above: the group-level exact Mann-Whitney (secondary) and every pairwise exact McNemar over customers perturbed in both conditions (primary), on exposure-adjusted drift. Stated-vs-revealed importance is reported on both lists, with stated rates taken from the manifest's pre-registered citation table; the legacy rows keep the raw-string rates they always had and gain the manifest rate beside them, because the two instruments count differently (raw strings versus exact schema matches, once per decision).
+
+**Mechanics.** `h1_baseline_replication.py` writes a frozen manifest (`h1_replication_manifest.json`): input hashes by file name, the complete citation table including never-cited fields, the overlap, the trigger, the conditions to add, and the Question A groups, all covered by `decision_sha256`; the bootstrap, any Spearman value, a cost estimate and a sequencing warning sit in a `context` block outside the hash. It is write-once: re-running with identical decision content leaves it untouched; different content, or a hand-edited file, is refused. It is run after the five baseline runs finish and before any dithered condition is run through the agent (it records whether dithered decisions already existed). `generate_h1_replication_conditions.py` verifies the hash, refuses if `canonical_customers.json` changed since the baseline, and records the hash of every file it generates. `evaluate_h1.py` verifies the hash and that the baseline files and canonical customers are unchanged, reads the groups from the manifest, never re-derives the trigger, refuses to run if pre-registered 1b conditions have no decisions (unless told `--allow_incomplete_1b`), and skips the 1b analysis loudly if there is no manifest.
+
+**What the rule does not claim.** Low overlap shows that the 1a list does not reproduce under the 1b instrument. The instrument changed in several ways at once (priority-level examples, output example values, the `key_factors` cap and example, and the customers), so the rule makes no claim about which change caused it. Overlap of 3 or more shows the list survived; it does not show 1a was uncontaminated. Selection uses only clean-baseline citations and never a drift outcome, so the rule adds no forking path. False triggers are cheap (about $2.32 per 1,000-call condition at 1a's observed per-record cost, at most about $12) and missed triggers weaken H1, so a threshold of 2 is reasonable.
 
 ---
 
@@ -947,6 +980,50 @@ events make most of these comparisons underpowered.
 say which field was doubted. Judge-derived results are provisional until the
 human audit calibrates the judge (see the H5 section).
 
+### Redundancy table and the stated-range attribute (pre-specified; fixed before the full run)
+
+**Hypothesis, not finding.** In the first smoke runs both genuine detections came from cross-referencing a sibling field (total spend against lifetime value; tenure against the account-creation date), not from noticing an odd number against a stated range. That suggests detection may track relational coherence more than the plausibility of a single value. It rests on two cases, and it is confounded by the engine's own propagation (see "Propagated vs. isolated corruption"). The isolated-corruption arm is the manipulated test. The table below makes the rest of the design checkable without looking at outcomes.
+
+**Derived only from the design, never from outcomes.** `field_redundancy.py` lists, for each of the 25 fields any condition dithers, the sibling fields in the same record that an agent could cross-check against, from the generator's own formulas and the engine's propagation list. Tiers, strongest first: **strict** (the sibling is an exact deterministic function of the field, or vice versa: `tenure_months` and `account_created_date`, `last_purchase_days_ago` and `last_purchase_date`, `churn_risk_score` and `is_at_risk`, `support_tickets_open` and `recently_contacted_support`, `name` and `email`); **bounded** (a hard constraint inferable from what the fields mean, such as `support_tickets_closed >= support_tickets_open` or `is_vip` implying the high-value segment); **approximate** (a generator formula with a bounded random factor: `total_spend` is `total_purchases` times `avg_order_value` times a factor in 0.90-1.10; `lifetime_value_estimate` is `total_spend` times a segment-specific multiplier band); **soft** (`customer_segment` sets a hard band on the field in the generator, but the band is never stated to the agent). With `recompute_derived` on (every condition except the two isolated arms) the engine recomputes some siblings after dithering (`is_at_risk` after `churn_risk_score`, `recently_contacted_support` after `support_tickets_open`), which removes that contradiction. A field's **class** is the strongest tier among siblings the engine does NOT recompute:
+
+| Field | Strict | Bounded | Approximate | Soft (segment band) | Engine recomputes | Class (default) | Class (isolated arm) | Range stated to agent |
+|---|---|---|---|---|---|---|---|---|
+| `acquisition_channel` | - | - | - | - | - | none | none | - |
+| `address` | - | - | - | - | - | none | none | - |
+| `avg_order_value` | - | - | total_purchases, total_spend | segment | - | approximate | approximate | - |
+| `avg_resolution_time_hours` | - | - | - | - | - | none | none | - |
+| `churn_risk_score` | is_at_risk | - | - | segment | is_at_risk | soft_only | strict | 0-1 |
+| `email` | name | - | - | - | - | strict | strict | - |
+| `email_open_rate` | - | - | - | segment | - | soft_only | soft_only | 0-1 |
+| `fraud_risk_score` | - | - | - | segment | - | soft_only | soft_only | 0-1 |
+| `has_active_subscription` | - | - | - | - | - | none | none | - |
+| `has_pending_order` | - | - | - | - | - | none | none | - |
+| `is_vip` | - | customer_segment | - | - | - | bounded | bounded | - |
+| `last_login_days_ago` | - | last_purchase_days_ago, tenure_months | - | - | - | bounded | bounded | - |
+| `last_purchase_days_ago` | last_purchase_date | last_login_days_ago, tenure_months | - | - | - | strict | strict | - |
+| `lifetime_value_estimate` | - | - | total_spend | - | - | approximate | approximate | - |
+| `name` | email | - | - | - | - | strict | strict | - |
+| `nps_score` | - | - | - | segment | - | soft_only | soft_only | 0-10 |
+| `payment_failures` | - | - | - | segment | - | soft_only | soft_only | - |
+| `phone` | - | - | - | - | - | none | none | - |
+| `purchase_frequency_days` | - | - | total_purchases | - | - | approximate | approximate | - |
+| `refund_rate` | - | - | - | - | - | none | none | - |
+| `support_tickets_closed` | - | support_tickets_open | - | - | - | bounded | bounded | - |
+| `support_tickets_open` | recently_contacted_support | support_tickets_closed | - | segment | recently_contacted_support | bounded | strict | - |
+| `tenure_months` | account_created_date | last_login_days_ago, last_purchase_days_ago | - | - | - | strict | strict | - |
+| `total_purchases` | - | - | avg_order_value, purchase_frequency_days, total_spend | segment | - | approximate | approximate | - |
+| `total_spend` | - | - | avg_order_value, lifetime_value_estimate, total_purchases | - | - | approximate | approximate | - |
+
+For H4's three fields the table reproduces the design logic: `tenure_months` is strict in both columns (the uncorrected `account_created_date`); `total_spend` is approximate in both (lifetime value; purchases times order value); `churn_risk_score` is **soft_only by default** (the engine rewrites its strict sibling) and **strict in the isolated arm**, which is exactly the manipulation that arm exists to test. `email` is derived from `name`, so `h1_individual_email` dithers one half of a strict pair.
+
+**Direction matters.** Strict relations expose every change to the field. Bounded, approximate and soft relations expose a corruption only when it pushes the value outside the region the relationship allows (`support_tickets_open` dithered downward never violates `closed >= open`). The table says which siblings exist, not that every corruption is exposed.
+
+**Stated ranges are a second, independent attribute.** The agent's system prompt states a value range for only four fields: `nps_score` (0-10) and `email_open_rate`, `churn_risk_score`, `fraud_risk_score` (0.0-1.0). So "implausible" means different things by field: an implausible churn value violates a range the agent was told, while an implausible `total_spend` or `tenure_months` breaks no stated rule. Field-to-field differences in implausible-value handling are therefore partly confounded with whether a range was stated. The ranges are parsed from the agent file itself, so they cannot drift from what the agent is told.
+
+**How the table is used.** (1) H4's isolation test, pre-specified above. (2) An **exploratory** cross-condition analysis: keyword detection rate and echo-class distribution by redundancy class across all single-field conditions, grouping {strict, bounded, approximate} against {soft_only, none} with soft_only also reported separately. It is exploratory because fields differ in many ways besides redundancy (operator, magnitude, type, stated range). (3) Seven fields have no link to any other field (`acquisition_channel`, `phone`, `address`, `refund_rate`, `avg_resolution_time_hours`, `has_pending_order`, `has_active_subscription`): natural negative controls, reported as exploratory.
+
+**Verification and freeze.** The module checks itself against the generator and the engine: 21 relationships over 3,000 generated customers; the engine probed on all 25 fields (it changes exactly the field plus the declared propagation, nothing else); within-segment independence of the unlinked numeric fields; the stated ranges against the agent's prompt and against clean data. Its checks were sabotaged seven ways and each was caught. The module's hash is recorded in the freeze manifest, and the table is never edited after seeing which fields produced detections.
+
 ### Condition set (8 total)
 
 `h4_churn_risk_score_plausible`, `h4_churn_risk_score_implausible`,
@@ -985,6 +1062,8 @@ to estimate the list's false-negative rate. This produces an honest,
 reportable number ("estimated N% miss rate") without contaminating the frozen
 metric or introducing a second non-deterministic system.
 
+*Revision 2:* after the first smoke runs a judge was added as a **secondary, provisional** instrument, alongside two deterministic ones; the keyword list remains primary and unchanged. See "Instruments added after the first smoke runs."
+
 **Regex over plain string matching.** Plain keyword matching would miss
 inflectional variants ("conflict" vs. "conflicts" vs. "conflicting"). Light,
 fully transparent regex with word-boundary anchors closes this gap without
@@ -992,6 +1071,10 @@ introducing a stemming library dependency that's harder to audit by reading
 the code directly.
 
 ### The frozen keyword list (final, 25 patterns)
+
+The list below is generated from `H5_KEYWORD_PATTERNS` in `evaluate_core.py`, not retyped, and `check_amendment_consistency.py` fails if the two ever differ.
+
+**Two corrections made while verifying the list, both before any data existed.** (1) The amendment promised inflectional variants but nine patterns failed their own adverb or derived forms ("this value is unusually high" did not match `\bunusual\b`): `unusual`, `atypical`, `implausible`, `odd`, `strange`, `surprising`, `anomalous`, `suspicious` and `questionable` now accept their adverb forms. (2) The first version of the `questionable` fix, `\bquestionable|questionably\b`, was a precedence error: `|` binds loosest, so the second alternative had no leading word boundary and matched inside "unquestionably" ("an unquestionably high-value customer" counted as doubt about the data). It is now `\bquestionabl(?:e|y)\b`, and `check_amendment_consistency.py` lints every pattern for unparenthesized alternation and tests the list against positive and negative examples.
 
 **Direct inconsistency language:**
 ```
@@ -1003,22 +1086,22 @@ the code directly.
 
 **Plausibility/surprise language:**
 ```
-\bunusual\b
-\batypical\b
-\bimplausible\b
+\bunusual(?:ly)?\b
+\batypical(?:ly)?\b
+\bimplausib(?:le|ly)\b
 \bseems? off\b
 \bdoes(?:n't| not) add up\b
-\bodd\b
-\bstrange\b
-\bsurpris(?:ing|e|ed)\b
-\banomal(?:y|ies|ous)\b
+\bodd(?:ly)?\b
+\bstrange(?:ly)?\b
+\bsurpris(?:ing|e|ed|ingly)\b
+\banomal(?:y|ies|ous|ously)\b
 ```
 
 **Doubt/verification language:**
 ```
 \b(?:hard|difficult) to reconcile\b
-\bquestionable\b
-\bsuspicious\b
+\bquestionabl(?:e|y)\b
+\bsuspicious(?:ly)?\b
 \bseems? wrong\b
 \bappears? incorrect\b
 \bmay be (?:an )?error\b
@@ -1034,6 +1117,7 @@ the code directly.
 \bdata problem\b
 ```
 
+
 **"Uncertain about" considered and removed.** Every other pattern is
 data-forward, the data itself is the grammatical object of the doubt.
 "Uncertain about" is object-ambiguous, equally readable as uncertainty
@@ -1046,6 +1130,18 @@ outright rather than routed to manual audit, since this is a false-positive
 risk baked into the phrase itself, not a false-negative recall gap auditing
 could catch.
 
+### Instruments added after the first smoke runs
+
+The smoke runs (n=30 per H4 implausible condition, Haiku 4.5, temperature 0) showed that explicit detection is rare and that the agent's commonest response to a corrupted value is not doubt but reinterpretation or silent repair. Three instruments were added to the frozen keyword list. None replaces it.
+
+**1. The value echo check (deterministic).** For each dithered field, `classify_value_echo()` compares the value the agent was shown (from `dither_reference.json`; verified identical to `agent_input.jsonl` on all 6,859 dithered record-field pairs across 53 conditions) with its reasoning text. Classes: `echo` (the shown value appears, signed, at the precision written); `echo_pct_marker` (the same number with a `%` attached); `converted` (the shown value is absent but the shown value times a known factor appears, with the unit word that follows recorded, so a real unit change such as 570 -> "47.5 years" is separable from a rescale that kept the old label such as 810 -> "67.5 months"); `magnitude_only` (the sign was dropped); `omitted`; and `not_applicable` (categorical or boolean). The **confirmatory factor list is frozen: x100, /100, /12, x12**; magnitude suffixes K, M and B and the words thousand, million and billion are matched (lowercase `m` is deliberately not a suffix, because of "months"); ratio tokens such as the "10" in "5/10" are skipped; rounding at the precision written still counts as an echo. Any further factor (one case of /120 has been seen) belongs only in a separately labeled exploratory scan, never added to the confirmatory list after seeing data. `omitted` means the NUMBER is absent, not that the field was ignored: the agent may describe a value without quoting it, or cite a different quantity (lifetime value instead of total spend). The check is not blind by design: it measures what happened to the number, not whether the agent noticed anything.
+
+**2. Clean-baseline floors.** The echo classes and the keyword scan are also computed on the same customers' clean baseline reasoning (against the original value), so every dithered rate is read against what the instrument does to unperturbed text. The five baseline runs per customer are not independent (about 44% of clean texts are exact duplicates at temperature 0), so floors are point estimates and carry no intervals.
+
+**3. The blind LLM judge (provisional).** Three categories: `explicit_concern`, `narrative_reframing`, `unremarked_usage` (a fourth, "reformatted without comment", was merged into the third because a blind judge cannot tell it from plain restatement without knowing the field's normal format). Frozen as `PROMPT_ID v3-be665399de`, model `claude-haiku-4-5-20251001`, temperature 0, zero-shot with no examples (earlier versions leaked findings vocabulary into the prompt), evidence-first JSON with a machine-checked verbatim quote, a `figure_referenced` flag, and a priority rule (explicit_concern over narrative_reframing over unremarked_usage). It sees only `{id, field_label, reasoning_text}`: no value and no condition name. It is accepted despite the original rejection of a judge as the *primary* mechanism because it is the only instrument that attributes a reaction to a specific field's text and the only one that can see reframing ("a long-tenured customer (47.5 years)"; "negative churn risk ... indicates she is stable"). Its accuracy is NOT validated: on seven hand-labeled texts it matched three, and it gave three different labels to three near-identical phrasings of the same pattern. **Judge-derived counts, especially `narrative_reframing`, are provisional until the human audit calibrates it; headline claims rest on the deterministic instruments.** v3 is the judge of record for the first full-run analysis; any revision runs in parallel on the same data as a sensitivity check and the write-up reports whether conclusions depend on the version. Cost is about $0.001 per judged record. **Judged scope (decided): the eight H4 conditions** (about 8,000 records, about $8). Every pre-registered judge test lives in H4, so this scope covers all of them; the judge is not run on other conditions for the pre-registered analysis. Running it on every dithered condition (about $55-61) would add exploratory labels only; if that is ever done, it is done on all conditions at once and labeled exploratory, never on a chosen subset.
+
+**Architecture.** The deterministic fields (keyword hit, echo class per dithered field) are computed inside `load_condition()`, so every hypothesis's evaluator receives them; the judge is a separate script whose output joins by id. H5's aggregation is performed by `evaluate_h5.py`, to be built and frozen (the "analysis" stage of the freeze) before any result is examined; the analysis it performs is fixed here.
+
 ### Reporting structure
 
 Not a single number. Cross-tabbed three ways per condition:
@@ -1053,6 +1149,26 @@ Not a single number. Cross-tabbed three ways per condition:
    detection
 2. **Detected, no behavioral change**: noticed but didn't act on it
 3. **Not detected**: the blind spot, as found in experiment 1a
+
+### What is primary and what is exploratory
+
+**Primary:** the keyword detection three-way cross-tab per condition (above), read against the clean-baseline keyword rate, and the five paired exact McNemar tests per family pre-specified under H4. **Stratification:** `stable` customers are primary for every attribution of drift to corruption; boundary customers (lightly_boundary, deeply_boundary, tied_no_majority) are reported separately, never discarded, because H6 asks about them directly; "all" is also reported. **Exploratory, labeled as such in every output:** all echo-class tables; echo-class by drift and detection by drift beyond the pre-specified tests; the echo-by-judge matrix; every judge-derived table until the audit calibrates it; Jaccard coherence shifts; reasoning inertia; the redundancy-class analyses. Raw 2x2 counts accompany every p-value, with a `low_power` flag below 10 discordant pairs.
+
+### Reasoning inertia (descriptive, from the Jaccard machinery)
+
+Every customer already has five baseline runs, so the 10 pairwise Jaccard scores among a customer's own baseline texts are the clean-versus-clean noise floor, at no added cost. `jaccard_condition_level_shift()` tests whether a condition's dithered-versus-baseline coherence differs from that floor (Wilcoxon signed-rank on the paired per-customer difference), as built and verified for H3. **Reasoning inertia** is a per-customer descriptive flag, not a hypothesis test (ten baseline pairs are too few for a per-customer test): a customer's dithered-versus-baseline coherence is "flat" if it falls within the range of their own 10 baseline self-similarity scores, and inertia is flat coherence AND a flipped decision. It is reported as a count, disclosed as a threshold-based flag. It needs no new API calls.
+
+### Human audit (after the run)
+
+It validates the JUDGE; the original random sample of zero-hit texts still estimates the keyword list's miss rate. For the judge: stratified by the judge's label (a random sample would be almost all `unremarked_usage`, too few reframing cases to estimate sensitivity), including the implausible-down (x-1) arm on purpose, a slice of `unremarked_usage` to estimate misses, and a slice of clean baseline texts as negative controls for the judge's false-positive floor. Labels must be derivable from the text alone and auditors work blind. A "both / ambiguous" option is offered and its rate reported. Texts already read during development are excluded. Agreement is reported with and without ambiguous cases, per category. A variant that tells the judge each field's documented range (ending blindness) may be evaluated on the same audit sample as a labeled sensitivity analysis, never as the default.
+
+### What H5 does not measure
+
+- The keyword scan hits anywhere in the text and cannot say which field was doubted; it is a coarse proxy for field-specific questions. The judge attributes detection to a field but is provisional.
+- Detection is measured under a prompt that tells the agent that fields can conflict ("If certain fields suggest conflicting priorities, weigh them ..."); this is identical in every condition, so it cannot bias a comparison, but it means "organic" detection is detection under that cue (see "A Note on Prompt Continuity").
+- `omitted` is not "ignored"; `converted` is not proof of noticing; an unmentioned field is not an unnoticed field.
+- Both genuine keyword detections so far (n=2) came from cross-referencing a sibling field. That motivates the redundancy hypothesis (see H4); it is not evidence for it.
+- Deterministic text methods have a solid NEGATIVE result: whole-text severity-word matching failed (vocabulary reused across independent judgments in the same sentence) and so did a windowed-proximity variant. That justified building the judge, but it does not show a classifier is required or sufficient.
 
 ---
 
@@ -1367,19 +1483,18 @@ from the main pipeline, but does not belong in the core hypothesis set.
 
 | Hypothesis | Original | Amended |
 |---|---|---|
-| H1 | 7 | 14 |
+| H1 | 7 | 14 (+0-5 conditional replication) |
 | H2 | 4 | 12 |
 | H3 | 8 | 15 |
 | H4 | 2 | 8 |
 | H7 (new) | — | 4 |
 | H8a (new) | — | 2 |
 | H8b (new) | — | 0–1 (conditional) |
-| **Total** | **21** | **55-56** |
+| **Total** | **21** | **55 (up to 61 with both conditionals)** |
 
-(H1=14 + H2=12 + H3=15 + H4=8 + H7=4 + H8a=2 + H8b=0–1)
+(H1=14 + H2=12 + H3=15 + H4=8 + H7=4 + H8a=2 = 55; H8b adds 0-1 and the H1 replication rule adds 0-5, so 55-61.) The count of 55 is checked against the engine's own `build_all_conditions()` by `check_amendment_consistency.py`.
 
-
-At n=1,000 customers per condition: 55,000–56,000 dither-condition agent calls, plus the 5,000 call primary baseline (5 runs × 1,000 customers).
+At n=1,000 customers per condition: 55,000 dither-condition agent calls without conditionals (up to 61,000 with both), plus the 5,000-call primary baseline (5 runs × 1,000 customers).
 
 Boundary expansion cost is a genuine open unknown, not a placeholder estimate. The mechanism now covers three tiers 
 (`deeply_boundary`, `lightly_boundary`, `tied_no_majority`, per the `aggregate_baseline.py` tied vote fix) with an adaptive 
@@ -1388,9 +1503,58 @@ not the earlier flat "minimum 25 runs" estimate this section previously cited. E
 combined boundary population turns out to be once the primary baseline actually runs. See `RESEARCH_NOTES.md`'s open 
 question tracking this same population split as a stochasticity finding in its own right.
 
-Total: roughly **60,000–61,000 agent calls before boundary expansion**, with boundary expansion itself unknown until real baseline data exists.
+Total: roughly **60,000–61,000 agent calls before boundary expansion and without conditional conditions**, up to **66,000** if both conditional rules fire.
 
-At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 at standard API pricing before boundary expansion, $70–71 with Batch API's 50% discount**.
+At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 at standard API pricing without conditionals, $70–71 with Batch API's 50% discount**; the H1 replication rule adds at most 5,000 calls (about $12 standard, $6 Batch), so the upper bound is about **$153 standard, $77 Batch**. The judge adds about $0.001 per judged record: about $8 for the eight H4 conditions (the decided scope), about $55–61 if it were ever run on every dithered condition (not planned). This project is self-funded, and that is a standing constraint on every cost decision.
+
+---
+
+## Pre-Registration Freeze
+
+This amendment is pre-registered only through its commit. Before the 5,000-call baseline starts: (1) commit this amendment and everything it describes, with a clean working tree; (2) run `check_amendment_consistency.py`, which exits non-zero if any number, pattern list, constant or table in this amendment that is also defined in code disagrees with the code; (3) run every test suite and validator listed below; (4) run `freeze_manifest.py write --stage collection`, which records the git commit and the sha256 of each artifact in `freeze_manifest_collection.json` (write-once; it refuses uncommitted artifacts); (5) run `freeze_manifest.py verify --stage collection` before the first condition is run, and again before analysis. Nothing frozen changes afterwards; a needed change is a new, dated, disclosed amendment, never an edit.
+
+**Collection stage** (what produces and measures the data):
+- `business_decision_agent.py`
+- `shared/data_generation/base_customer_generator.py`
+- `shared/data_generation/dither_engine.py`
+- `shared/data_generation/validate_dama_dimensions.py`
+- `generate_dithered_data.py`
+- `generate_h1_replication_conditions.py`
+- `check_and_generate_h8b.py`
+- `aggregate_baseline.py`
+- `refine_boundary_convergence.py`
+- `run_boundary_expansion.py`
+- `prepare_next_batch.py`
+- `evaluate_core.py`
+- `classifier_prompt.py`
+- `classify_detection_llm_judge.py`
+- `extract_for_classifier.py`
+- `field_redundancy.py`
+- `h1_baseline_replication.py`
+- `evaluate_h1.py`
+- `evaluate_h2.py`
+- `evaluate_h3.py`
+- `evaluate_h4.py`
+- `validate_h1_schema.py`
+- `validate_h3_schema.py`
+- `validate_h4_schema.py`
+- `test_h1_replication.py`
+- `test_evaluate_h1_manifest.py`
+- `check_amendment_consistency.py`
+- `freeze_manifest.py`
+- `test_freeze_manifest.py`
+- `test_business_decision_agent.py`
+- `1b_DESIGN_AMENDMENT_1.md`
+
+**Analysis stage** (evaluators for hypotheses not yet built; frozen after they are committed and before any result is examined):
+- `evaluate_h5.py`
+- `evaluate_h6.py`
+- `evaluate_h7.py`
+- `evaluate_h8.py`
+
+**The commitment that makes two stages valid.** No result from any dithered condition is examined until `freeze_manifest.py write --stage analysis` has been run, apart from the pipeline's own validity checks and the one pre-registered conditional rule that reads dithered results (H8b's selection, which reads H8a's drift rates). The H1 replication rule reads only the clean baseline.
+
+**Deliberately not frozen:** the human audit sample and its labels (produced after the run, from texts selected by the stratification above); the optional lookup of 1a's own citation data; and anything labeled exploratory.
 
 ---
 
@@ -1434,7 +1598,7 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 
   design isolates the measurement). Within segment breakdown added as
   enrichment. 75% magnitude level parked, not rejected. Full 1,000-customer
   population confirmed over subsampling; seed-robustness deferred instead.
-- **H3** restructured: 8 → 11 conditions. Confidence and Jaccard enrichments
+- **H3** restructured: 8 → 15 conditions (11 at the first restructuring; 15 after the field-composition correction, the `payment_failures` individual condition, and the correlated reference arms the GEE difference-in-differences requires). Confidence and Jaccard enrichments
   added for measurement granularity. Uncorrelated reference pair
   (avg_resolution_time_hours + refund_rate) added as a baseline comparison
   point. Full 2x2 directionality achieved for all three pairs (mostly free,
@@ -1464,11 +1628,11 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 
 - **H5** fully specified: frozen 25-pattern regex keyword list (with
   "uncertain about" deliberately excluded), Jaccard secondary metric shared
   with H3, manual audit methodology for false negative rate estimation,
-  three-way cross tab (detected+changed / detected+unchanged / not detected).
+  three-way cross tab (detected+changed / detected+unchanged / not detected). *Revision 2 adds* the value echo check, clean-baseline floors, a provisional three-category judge, the reasoning-inertia flag, a stratified human audit, and stated limits.
 - **H6** fully specified: terminology clarified (tiers = stability
   classification, not decision buckets), median ratio + Fisher's exact
-  approach to avoid multiple comparisons inflation, deeply_boundary run
-  expansion to a minimum of 25 (exact number pending real population size),
+  approach to avoid multiple comparisons inflation, boundary-customer run
+  expansion by an adaptive Wilson-interval convergence loop (batches of 10, ±15pp, hard cap of 60 runs per customer) across deeply_boundary, lightly_boundary and tied_no_majority,
   general fragility vs field specific sensitivity crosstab identified as
   free (reuses H1).
 - **H7** (Breadth Effects) added. 4-condition accumulation ladder testing
@@ -1494,9 +1658,7 @@ At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 
   and the undefined "business outcomes" objective, both inherited from 1a,
   are flagged as inert until now and first meaningfully exercised by H3's
   uncorrelated arm. Left unpatched to avoid introducing new confounds.
-- Total condition count increased from 21 to 46–47; cost re-estimate
-  (~$62–64 at Batch pricing) flagged as needed before full pipeline
-  execution.
+- Total condition count increased from 21 to 55 (up to 61 with the two conditional rules); cost re-estimated: see "Updated Condition Count and Cost Implications".
 - **H1** expanded from 12 to 14 conditions: two individual field conditions 
 added (`email`, `is_vip`) to close the only two categories with zero 
 individually tested fields. Question A's group level test explicitly flagged 
@@ -1505,3 +1667,16 @@ A per-field two proportion test against the comparison group's average adopted
 as the primary analysis instead. Global sequential condition numbering dropped 
 throughout the document in favor of `condition_id alone`, removing a recurring 
 source of renumbering errors.
+
+### Revision 2 (the pre-registration pass)
+
+- **H1 conditional replication rule** pre-registered: trigger (top-5 overlap with 1a at most 2), measurement definitions, up to five new `h1_replication_<field>` conditions, the Question A groups for both lists, and the frozen manifest that carries them. `evaluate_h1.py` extended to consume it; stated-vs-revealed importance reported on both lists.
+- **H4 redundancy table** (25 fields; strict / bounded / approximate / soft, with and without engine propagation) and the **stated-range attribute** added, generated from code and verified against the generator and engine. The garbage-filter analysis and its primary tests were already specified under H4.
+- **H5** brought up to date: keyword list regenerated from code (nine adverb-form patterns; a precedence error in the `questionable` pattern that matched "unquestionably" found and fixed), value echo check, floors, provisional judge v3, primary/exploratory split, reasoning inertia, human audit design, limits.
+- **Prompt Continuity** extended: the output-format differences from 1a (`key_factors` cap and example, example values), the stated-range asymmetry, the filename correction, and the H5 "organic" caveat.
+- **Data generation reproducibility** note added (Faker's date-dependent `dob`), with a binding single-invocation procedure.
+- **Statistical methodology**: thirteenth entry (decision rules frozen as hashed manifests; Holm families for rare paired events).
+- **Counts and costs** corrected: 55 conditions (up to 61), the judge's unit cost, the conditional H1 cost; stale entries above corrected.
+- **Pre-registration freeze** defined, with `freeze_manifest.py` (write-once, two stages) and `check_amendment_consistency.py` (amendment against code).
+- **Engine and agent**: isolated-corruption conditions in the shared engine (it builds 55); the agent's `--resume` and `--max_records`.
+- **Evaluators not yet built:** H5, H6, H7, H8. Their analyses are specified in this amendment; they must be written and frozen (analysis stage) before any result is examined.

@@ -1607,7 +1607,7 @@ H5_KEYWORD_PATTERNS = [
     r"\banomal(?:y|ies|ous|ously)\b",
     # Doubt/verification language (adverb forms added)
     r"\b(?:hard|difficult) to reconcile\b",
-    r"\bquestionable|questionably\b",
+    r"\bquestionabl(?:e|y)\b",
     r"\bsuspicious(?:ly)?\b",
     r"\bseems? wrong\b",
     r"\bappears? incorrect\b",

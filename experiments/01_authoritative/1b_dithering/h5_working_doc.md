@@ -1610,3 +1610,49 @@ rehearsal of h1_baseline_replication.py on the n=30 smoke baseline (unmatched sh
 scratch --out path, the manifest is write-once); a dress rehearsal. Evaluators for H5, H6, H7 and H8 do not
 exist yet. Post-run: human audit, echo x drift cross-tab, blind vs range-informed judge variant, omission
 pairing, the optional 1a anchoring look.
+
+
+## Amendment pass (revision 2): done; the ledger is the detailed record
+
+`amendment_fold_in_ledger.md` lists every decision, its source, where it landed, what was verified already
+folded, what was deliberately left for the write-up, what needs the owner's sign-off, and what was found and fixed.
+The amendment grew from 94.9 KB to about 129 KB: eleven sections unchanged, seven changed, two added.
+Every number, list and table the amendment shares with code is generated from the code and checked by
+`check_amendment_consistency.py` (22 checks; its self-test corrupts the text 14 ways and each is caught).
+
+**A real bug in the frozen keyword list, found by the pass.** `\bquestionable|questionably\b` is two
+alternatives (`|` binds loosest), the second without a leading word boundary, so it matched inside
+"unquestionably": "an unquestionably high-value customer" counted as doubt about the data. Fixed in
+evaluate_core.py to `\bquestionabl(?:e|y)\b`; the checker lints every pattern for unparenthesized
+alternation. No data had been collected under the old list. Also: nine patterns (not seven) failed their
+adverb forms; the amendment now carries the list generated from code.
+
+**New tools** (all in the freeze lists): `freeze_manifest.py` (write-once record of the git commit and the sha256
+of every frozen artifact, two stages; refuses uncommitted artifacts; found and fixed its own status-parsing bug
+in testing), `check_amendment_consistency.py`, and a durable `test_business_decision_agent.py` (the lost agent
+suite, rebuilt: 20 check groups, the system prompt frozen by sha256, resume and max_records). Mutation testing:
+freeze tool 7 of 7, agent 8 of 8, consistency checker 14 of 14.
+
+Hashes: 1b_DESIGN_AMENDMENT_1.md 6c88e6f474b928ce; evaluate_core.py 37f35d8307216876;
+freeze_manifest.py 57760e61a8b6e4e9; check_amendment_consistency.py cb94ad7b5719105b;
+test_freeze_manifest.py 3e41b996d07b8b1b; test_business_decision_agent.py 13eb91e1d5ef0302.
+
+**Status of the pre-run list, updated.** Done: engine (55 conditions), agent resume and its durable test, H1
+tooling and evaluator, garbage-filter analysis, redundancy table (draft), the amendment pass. Open before the
+full run: the owner's sign-off on ledger section D; commit and refresh the project-knowledge amendment; the
+free smoke-baseline rehearsal; the redundancy-table freeze; `evaluate_h5`-`evaluate_h8` (analysis stage, frozen
+before results are examined); then `freeze_manifest.py write --stage collection`, a single-invocation
+generation, and the baseline.
+
+
+## Owner decisions recorded (after the amendment pass)
+
+1a. Segment-band "hint only" siblings are NOT counted as redundancy partners; they are reported separately
+(primary grouping: strict/bounded/approximate vs soft_only/none). 2. The judge runs on the eight H4 conditions
+only (about $8): every pre-registered judge test lives in H4; running it on every dithered condition (about
+$55-61) would add exploratory labels only, and if ever done is done on all conditions at once, labeled
+exploratory. The project is self-funded, which is why the cheaper scope was chosen. 3. Two-stage freeze kept
+(collection before the baseline, analysis before any dithered result is examined), with the added commitment in
+the amendment's Pre-Registration Freeze section. Still open and small: the spend-partner listing (1b), the
+no-link negative controls (1c). `check_amendment_consistency.py` now also checks the judged scope and the
+two-stage commitment (24 checks; its self-test corrupts the text 16 ways).
