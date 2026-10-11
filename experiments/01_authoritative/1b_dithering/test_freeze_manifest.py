@@ -69,5 +69,5 @@ rc, text = run(fm.write, d5, "collection", d5 / "f.json", artifacts=["a.txt"]); 
 print("F6  the real artifact lists")
 assert set(fm.ARTIFACTS) == {"collection", "analysis"} and len(set(fm.ARTIFACTS["collection"])) == len(fm.ARTIFACTS["collection"]); ok("two stages; no duplicate artifacts")
 assert "1b_DESIGN_AMENDMENT_1.md" in fm.ARTIFACTS["collection"] and "business_decision_agent.py" in fm.ARTIFACTS["collection"] and "freeze_manifest.py" in fm.ARTIFACTS["collection"] and "test_freeze_manifest.py" in fm.ARTIFACTS["collection"]; ok("the amendment, the agent, and the freeze tooling itself are frozen")
-assert fm.ARTIFACTS["analysis"] == ["evaluate_h5.py", "evaluate_h6.py", "evaluate_h7.py", "evaluate_h8.py"]; ok("the analysis stage holds exactly the evaluators not yet built")
+assert fm.ARTIFACTS["analysis"] == ["evaluate_h5.py", "validate_h5_schema.py", "test_evaluate_h5.py", "evaluate_h6.py", "evaluate_h7.py", "evaluate_h8.py"]; ok("the analysis stage holds the H5 evaluator, validator and test, and the H6-H8 evaluators still to be built")
 print(f"\n{n} check groups passed")

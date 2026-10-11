@@ -1656,3 +1656,154 @@ exploratory. The project is self-funded, which is why the cheaper scope was chos
 the amendment's Pre-Registration Freeze section. Still open and small: the spend-partner listing (1b), the
 no-link negative controls (1c). `check_amendment_consistency.py` now also checks the judged scope and the
 two-stage commitment (24 checks; its self-test corrupts the text 16 ways).
+
+Final two small decisions confirmed by the owner, as drafted: (1b) spend, purchases and order value are listed as
+one another's approximate partners; (1c) the seven no-link fields are named as exploratory negative controls. The
+owner also confirmed that the eight H4 conditions cover every pre-registered judge test. The amendment revision-2
+commit is in and the tree is clean. Next: the free smoke-baseline rehearsal of h1_baseline_replication.py, then
+the analysis-stage evaluators (H5, H6, H7, H8).
+
+
+## Smoke-baseline rehearsal result, the H5 evaluator, and the macro-review gate
+
+**Rehearsal of the H1 replication rule on the real n=30 smoke baseline** (scratch output path; 30 customers x 5
+runs = 150 decisions): **0.0% unmatched citations (0 of 1,189 items)**: the real agent writes field names
+exactly as they appear in the data, so the rule's biggest unverified assumption holds on real output. About 7.9
+citations per decision confirms the smoke runs used the uncapped prompt (1a: 2-3). Top-5 overlap with 1a was 4 of
+5 (support_tickets_open landed at 1b rank 9; at n=30 ranks are noise); the trigger did not fire. `customer_segment`
+and `recently_contacted_support` appeared in the raw top 8 and are skipped as ineligible, as designed. Worth
+carrying into the macro review: with about eight factors cited per decision and the top field at 98.7%,
+`key_factors` is closer to "everything considered" than to "what mattered most".
+
+**H5 evaluator (analysis stage): built and tested.** evaluate_h5.py (60df7570a0ed56d7), validate_h5_schema.py
+(a0dba24838129ab9), test_evaluate_h5.py (e8c736f37ce8c0dc). PRIMARY: the three-way detection
+table per condition and stratum (detected and changed / detected, no change / not detected) with the clean
+baseline floor and exposure; EXPLORATORY: echo classes with floors, Jaccard shift and the reasoning-inertia count,
+redundancy classes (soft_only reported separately, per the owner's decision) and the negative controls;
+PROVISIONAL: judge tables for the H4 conditions. All tables cover perturbed customers only (exposure-adjusted).
+16 check groups with every number recomputed independently (including the Jaccard coherence re-implemented from the
+documented tokenizer and the Wilcoxon p-value); 13 of 14 mutations caught (the 14th is an equivalent mutant: a
+redundant eligibility guard); 8 validator corruptions caught. Testing exposed one thing worth knowing: the echo
+check's documented specificity rule (a rounded conversion needs at least two significant digits) scores a
+one-significant-digit conversion such as "-0.8 years" as `omitted` by design; the amendment now says so.
+
+**Macro-review gate (the owner's request).** Before the collection freeze, step back and confirm the experiment
+still tests what we think it tests (1a: duplicated data; 1b: data that is not duplicated but wrong, as controlled
+perturbations of otherwise valid records). Deliverable: a claims map. Not done yet, by design; see the ledger,
+section G, item 0.
+
+
+## Smoke-baseline rehearsal of h1_baseline_replication.py (n=30, 5 runs): result
+
+Run on the owner's machine with a scratch --out path (the real manifest location untouched). 150 decisions used,
+0 excluded; **0 of 1,189 citations unmatched (0.0%)**: the real agent writes exact schema field names, so the
+rule's measurement assumption holds on real output. About 7.9 fields cited per decision (1,189 / 150), versus 1a's
+cap of 2-3: the smoke baseline ran under the current uncapped prompt, so comparison with 1a is by rank only.
+Top-5 overlap with 1a: 4 of 5 (trigger not fired; at n=30 this is not informative). Where 1a's five landed:
+last_purchase_days_ago #2, churn_risk_score #1, nps_score #5, lifetime_value_estimate #3, support_tickets_open #9
+(50.0%). Top-8 included two fields that cannot be dithered (recently_contacted_support 60.0%, customer_segment
+50.7%): the eligibility rule would have skipped them. Rank-5/6 rate margin 12.0 points; citation rates in the top
+five ran 72-99% of decisions.
+
+## Macro review gate (before the freeze): agenda so far (noted, NOT analyzed; no conclusions drawn)
+
+Purpose: confirm that what the experiment measures still answers the research question. 1a asked what happens
+when an agent is given duplicate data; 1b asks what happens when data is not duplicated but is wrong. The owner
+asked for this review to be done before the run. Items noticed so far:
+1. **What "wrong" means here.** The conditions mostly alter one or a few fields on an otherwise internally
+   consistent record (the isolated-churn arm is the exception). Real enterprise problems (stale or mis-mapped
+   fields, unit changes, default or null fills, systemic drift) may look different. Map each condition family to
+   a real failure mode and state which are covered and which are not.
+2. **"Drift" is not "error".** The reference is the agent's own consensus decision on clean data (the finalized
+   ground truth), not an external correct answer. 1b measures the sensitivity of decisions to data changes, not
+   whether decisions become wrong. The claims must be worded that way.
+3. **The stated-importance instrument.** With no cap the agent cites about 8 fields per decision, so the
+   "self-reported top 5" ranks what is mentioned most, which may be broader than what influenced the decision
+   most. Bears on H1 Question A and the replication rule.
+4. **Generalization.** One model (Haiku 4.5), one prompt, temperature 0, synthetic customers from one generator.
+   How strongly may conclusions be worded?
+5. **Detection is measured under a prompt that mentions conflicting fields** (the "organic" qualifier already
+   recorded in H5).
+6. **Dither sizes and operators are our choices** (15% drift, x100, x-1, resets). How do they map to realistic
+   error sizes, and what does H2's magnitude curve license us to say?
+7. **Claims table.** Before the run, write down for each headline hypothesis: if we see pattern X we claim Y; if
+   we see Z we claim nothing.
+8. **The 1a to 1b narrative.** Duplicated data (redundant copies of correct information) versus wrong values:
+   where the story holds and where it does not.
+
+
+## H5 evaluator: reviewed, revised and re-verified (SUPERSEDES the H5 evaluator entry above, including its hashes)
+
+**Provenance.** The first version of evaluate_h5.py, validate_h5_schema.py and test_evaluate_h5.py was built in an
+earlier attempt at the same request, during a connection drop on the owner's side: the work finished in the
+sandbox but the response never reached the owner, who therefore had no H5 evaluator locally. A second attempt
+found the files, did NOT overwrite them, reviewed them in full, and (with the owner's authorization to resolve
+discrepancies) revised them as the single author.
+
+**Review.** The design was sound and its tests were strong (10 of 11 deliberate bugs caught). Three gaps against
+the amendment, all resolved: (1) the three-way table's "changed" ignored confidence although the amendment says
+"decision/confidence"; it now means the decision differs from the reference OR the dithered confidence lies outside
+the customer's own baseline min..max (no recorded range: counted on the decision alone and as "confidence unknown"),
+with the decision-only table reported beside it (that is the one the pre-specified tests use); (2) reasoning
+inertia counted customers with only two matching baseline texts, where a single baseline pair makes "flat" nearly
+impossible and biases the count down: it now needs at least three, customers with two still feed the coherence
+shift and are reported as excluded, and "within range" is inclusive; (3) incomplete data passed silently: the
+evaluator now refuses when any generated condition lacks decisions (as H1 and H4 do) unless `--allow_incomplete`,
+and its output lists what is missing. The amendment gained a "Definitions the evaluator fixes" subsection, and
+`check_amendment_consistency.py` verifies it.
+
+**Verification.** test_evaluate_h5.py: 22 check groups, every number recomputed independently. New planted cases:
+varied confidences with a missing range for every ninth customer; customers with exactly two baseline texts; and
+two engineered customers whose dithered coherence lands EXACTLY on the boundary of the baseline range (Jaccard
+0.5 against every baseline text and every baseline pair), one with five texts and one with two. Mutation testing:
+13 evaluator bugs and 2 validator bugs, all caught; one (counting flat coherence over all eligible customers) first
+survived because no planted two-text customer was ever flat, which is why the second engineered customer exists; the
+earlier suite's single miss (an exclusive instead of inclusive "within range") is now caught. The validator gained
+the new consistency checks (adding confidence can only grow "detected and changed"; inertia-eligible plus excluded
+equals eligible; and others) with five new corruption tests. Full sweep from a clean mirror: 52 / 24 / 22 / 17 / 20
+check groups across the H1 tooling, the H1 evaluator, H5, the freeze tool and the agent; the amendment checker
+26 of 26 with artifact existence, its self-test 18 of 18; field_redundancy ALL CLAIMS VERIFIED.
+
+Hashes: evaluate_h5.py 09b093692b935063; validate_h5_schema.py f6961d11de75c473;
+test_evaluate_h5.py c0464bd409107d47; 1b_DESIGN_AMENDMENT_1.md 78049895ed5dc2db;
+check_amendment_consistency.py ba5ca4a77ff583b7.
+
+**Remaining before the run:** the evaluators for H6, H7 and H8 (analysis stage); the macro-review gate; then the
+collection freeze, single-invocation generation, and the baseline.
+
+
+## H5 evaluator: the owner's three pre-commit checks, and a latent validator bug they exposed
+
+**1. "Perturbed" means the value actually changed.** Verified in the engine and on data. `_dither_fields` is built
+only from fields whose value changed; a field selected but unable to move (the engine's own example is
+payment_failures = 0 drawn downward, which clips) goes to `_dither_blocked`. Scan of all 55 conditions at n=200
+(11,000 records): 10,648 perturbed, 0 perturbed-but-unchanged, 437 blocked. In h3_individual_payment_failures, 17 of
+200 are blocked and appear in no H5 table. The `_dither_applied` flag is True for 352 never-changed records, so it
+must not be used to select records (the evaluator uses `_dither_fields`). New test group W9 reproduces this and a
+mutation that selects on `_dither_applied` is caught. Written into the amendment ("Perturbed means changed").
+
+**2. Class-by-drift matrices.** The evaluator already exported echo class x drift, judge category x drift and
+detection x drift per condition, field and stratum (stable included), but as rate blocks with the "not drifted"
+column implicit (n - k); H4's garbage-filter output carries the same tables per arm. They are now ALSO exported as
+explicit count matrices (drifted / not drifted), checked against the independent recomputation and by the validator.
+
+**3. Audit stamp.** No such block existed, and no record of one being settled could be found (working doc, ledger,
+amendment, available transcripts). Added: `audit_stamp` (sha256 and pattern count of the frozen keyword list, the
+frozen echo scale factors, the judge's frozen PROMPT_ID against the ids found on each judged condition, null where no
+judge ran, with judge output carrying no id flagged as not matching) and, per condition, `sample_sizes` (total N,
+perturbed N, stable N, boundary N, unclassified N) and `judge_prompt_ids`. The test world now includes customers with
+an unrecognized tier so the unclassified count is exercised.
+
+**A latent bug found along the way (W9 exposed it).** Both validate_h5_schema.py and the already-committed
+validate_h4_schema.py checked `0 <= lo <= rate <= hi <= 1` strictly. `wilson_interval(0, 183)` returns a lower bound of
+1.7e-18, a float artifact above the rate of exactly 0, so a cell with ZERO detections (very plausible in the real run)
+was reported as structurally invalid. Both now use a 1e-9 tolerance; a regression group (W10) covers k = 0 and k = n at
+several n and confirms a genuinely wrong interval is still caught. **validate_h4_schema.py must be re-committed.**
+
+Verification: test_evaluate_h5.py now 34 check groups; 14 deliberate bugs across the filter, matrices, stamp, sample
+sizes, both interval checks and the validator's new checks, all caught. Amendment checker 25 checks (26 with artifact
+existence), self-test 20 of 20.
+
+Hashes: evaluate_h5.py f6c213483c94fd06; validate_h5_schema.py e756bdf955c8df00;
+validate_h4_schema.py 6d8992f1bdd330bc; test_evaluate_h5.py 35f56e12ddbc8679;
+1b_DESIGN_AMENDMENT_1.md 48a1cd3607d86a45; check_amendment_consistency.py 1321381049ac65f9.

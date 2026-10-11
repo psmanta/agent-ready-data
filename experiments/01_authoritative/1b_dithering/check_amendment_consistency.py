@@ -10,7 +10,7 @@ in code, and exits 1 on any disagreement. It also lints the keyword list (an unp
 let a pattern match inside "unquestionably") and refuses known stale phrases.
 
     python check_amendment_consistency.py                  # from 1b_dithering/
-    python check_amendment_consistency.py --selftest       # corrupts the text 16 ways; each must be caught
+    python check_amendment_consistency.py --selftest       # corrupts the text 20 ways; each must be caught
     python check_amendment_consistency.py --skip_artifact_files   # when not run inside the repo layout
 
 Checks
@@ -141,6 +141,8 @@ def run_checks(text: str, skip_files: bool, base_dir: Path = HERE) -> List[Tuple
 
     # ---- judge, echo ---------------------------------------------------------------------------
     check("judge: PROMPT_ID in the amendment equals classifier_prompt.PROMPT_ID", f"PROMPT_ID {cp.PROMPT_ID}" in h5 and cp.PROMPT_ID == "v3-be665399de", cp.PROMPT_ID)
+    check("H5: the evaluator's definitions are stated (behavior changed incl. confidence; inertia needs three texts; completeness refusal)",
+          "### Definitions the evaluator fixes" in h5 and "OR the dithered confidence lies outside" in h5 and "at least three matching baseline texts" in h5 and "--allow_incomplete" in h5 and "Perturbed means changed" in h5 and "Class-by-drift matrices" in h5 and "Audit stamp" in h5)
     check("judge: model and temperature stated", "claude-haiku-4-5-20251001" in h5 and "temperature 0" in h5)
     check("judge: the decided scope is the eight H4 conditions, and the engine has exactly eight H4 conditions",
           "Judged scope (decided): the eight H4 conditions" in h5 and counts["h4"] == 8, f"engine H4 count {counts['h4']}")
@@ -199,6 +201,10 @@ def selftest(text: str) -> int:
         ("the trigger threshold reworded", lambda s: s.replace("overlap of 0, 1 or 2", "overlap of 0, 1, 2 or 3", 1)),
         ("a redundancy table row edited", lambda s: s.replace("| soft_only | strict |", "| soft_only | none |", 1)),
         ("an artifact removed from the freeze list", lambda s: s.replace("- `evaluate_h4.py`\n", "", 1)),
+        ("the inertia text-count rule reworded", lambda s: s.replace("at least three matching baseline texts", "at least two matching baseline texts", 1)),
+        ("the confidence part of 'behavior changed' removed", lambda s: s.replace("OR the dithered confidence lies outside", "and nothing else lies outside", 1)),
+        ("the 'perturbed means changed' guarantee removed", lambda s: s.replace("Perturbed means changed", "Perturbed means selected", 1)),
+        ("the audit stamp paragraph removed", lambda s: s.replace("**Audit stamp.**", "**Provenance.**", 1)),
         ("the judged scope reworded", lambda s: s.replace("Judged scope (decided): the eight H4 conditions", "Judged scope (decided): every dithered condition", 1)),
         ("the two-stage commitment removed", lambda s: s.replace("No result from any dithered condition is examined until", "Results may be examined before", 1)),
         ("a stale statement reintroduced", lambda s: s.replace("### Revision 2", "- Total condition count increased from 21 to 46–47\n\n### Revision 2", 1)),

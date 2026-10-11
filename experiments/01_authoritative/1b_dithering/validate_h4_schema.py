@@ -48,8 +48,9 @@ def _walk(node, path, issues):
             _check(f"{path}: 0 <= k <= n", isinstance(node["k"], int) and 0 <= node["k"] <= node["n"], issues)
             if node["n"] > 0:
                 lo, hi = node["ci"]
+                # tolerance: wilson_interval(0, 183) returns a lower bound of 1.7e-18, a float artifact above rate 0.0
                 _check(f"{path}: rate within its interval within [0,1]",
-                       0.0 <= lo <= node["rate"] <= hi <= 1.0, issues)
+                       -1e-9 <= lo <= node["rate"] + 1e-9 and node["rate"] - 1e-9 <= hi <= 1.0 + 1e-9, issues)
         for k, v in node.items():
             _walk(v, f"{path}.{k}", issues)
 

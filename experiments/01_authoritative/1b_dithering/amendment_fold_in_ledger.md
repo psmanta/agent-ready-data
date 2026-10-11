@@ -50,20 +50,20 @@ belong in the write-up when data exists.
 
 ## D. Owner decisions
 
-**Decided (recorded in the amendment):**
+**Decided (all recorded in the amendment):**
 
 | # | Decision | Owner's answer |
 |---|---|---|
 | 1a | Does a segment-band "hint only" sibling count as a redundancy partner? | **No: kept separate.** The primary grouping is {strict, bounded, approximate} vs {soft_only, none}; soft_only is also reported on its own. (Exploratory analysis only.) |
 | 2 | Judged scope | **The eight H4 conditions** (about 8,000 records, about $8). All pre-registered judge tests live in H4, so this covers them. Running the judge on every dithered condition (about $55-61) would add exploratory labels only; if ever done, on all conditions at once, labeled exploratory. |
 | 3 | Freeze lists and stages | **Two stages kept**: collection (31 files, before the baseline) and analysis (`evaluate_h5`-`evaluate_h8`, after they are built and before any dithered result is examined). Commitment added to the amendment: no dithered-condition result is examined before the analysis freeze, except the pipeline's validity checks and H8b's pre-registered selection rule. |
+| 1b | How spend's partners are listed | **Agreed as drafted**: spend, purchases and order value are listed as one another's approximate partners (spend is purchases times order value, within +/-10%). |
+| 1c | The seven fields with no link to anything | **Agreed as drafted**: named as exploratory negative controls (`acquisition_channel`, `phone`, `address`, `refund_rate`, `avg_resolution_time_hours`, `has_pending_order`, `has_active_subscription`). |
 
-**Still open (small; drafted as below):**
+**Drafted conservatively, no objection recorded (they stand unless you say otherwise):**
 
-1. **1b: the spend partners.** Spend, purchases and order value are listed as one another's approximate partners (spend is purchases times order value, within +/-10%). Alternative: list only spend with lifetime value.
-2. **1c: the seven fields with no link** (`acquisition_channel`, `phone`, `address`, `refund_rate`, `avg_resolution_time_hours`, `has_pending_order`, `has_active_subscription`) are named as exploratory negative controls.
-3. **Exploratory labeling** of the cross-condition redundancy-class analysis, and **H5 "primary"** meaning only the keyword cross-tab plus the five tests per family already pre-specified under H4: drafted conservatively (nothing is labeled primary that was not already pre-specified).
-4. **The `dob` code guard** (abort if a stored canonical file exists and the regenerated base differs): the single-invocation procedure is binding; the guard is not a requirement and is not implemented.
+1. **Exploratory labeling** of the cross-condition redundancy-class analysis, and **H5 "primary"** meaning only the keyword cross-tab plus the five tests per family already pre-specified under H4. Nothing is labeled primary that was not already pre-specified.
+2. **The `dob` code guard** (abort if a stored canonical file exists and the regenerated base differs): the single-invocation procedure is binding; the guard is not a requirement and is not implemented.
 
 ## E. Found and fixed during the pass
 
@@ -75,6 +75,7 @@ belong in the write-up when data exists.
 | Summary of Changes still said "46-47 conditions", "H3: 8 -> 11", "deeply_boundary minimum of 25" | contradicted the engine and the cost table | corrected |
 | Prompt Continuity cited `business_decision_agent_1b.py` | wrong file | corrected |
 | `freeze_manifest.py` stripped the leading space of `git status --porcelain`, mis-naming the first dirty file | wrong name in a refusal message | fixed (found by its own test) |
+| `validate_h4_schema.py` and `validate_h5_schema.py` compared a Wilson interval to its rate strictly; `wilson_interval(0, 183)` has a lower bound of 1.7e-18 above the rate 0.0 | a cell with zero detections would be reported as structurally invalid in the real run (the H4 validator is already committed) | 1e-9 tolerance in both; regression group W10 |
 
 Edits removed from existing sections, exactly: nine keyword patterns; the old cost/count lines; four stale
 Summary bullets; the old filename; one phrase in Prompt Continuity. Nothing else was deleted.
@@ -87,8 +88,8 @@ Summary bullets; the old filename; one phrase in Prompt Continuity. Nothing else
 
 ## G. Still to do, in order
 
-1. Commit the amendment and the tooling; refresh the project-knowledge copy of the amendment (the stale copy caused these errors).
-2. Free rehearsal of `h1_baseline_replication.py` on the n=30 smoke baseline (scratch `--out`): real `key_factors` unmatched share.
-3. Resolve section D; fold any changes in; rerun `check_amendment_consistency.py`.
-4. Build and freeze, before any result is examined: `evaluate_h5.py`, `evaluate_h6.py`, `evaluate_h7.py`, `evaluate_h8.py` (analysis stage).
-5. Before the baseline: `freeze_manifest.py write --stage collection`; generate everything once (see the reproducibility note); run the baseline; run `h1_baseline_replication.py`.
+0. **Macro review (the owner's request; a gate before the collection freeze).** Step back from the machinery and confirm the experiment still tests what we think it tests. 1a asked what duplicated data does to an agent's decisions; 1b asks what happens when the data is not duplicated but wrong, specifically controlled perturbations of otherwise valid records (drift, plausible versus implausible entry errors, magnitudes, correlations), and whether the agent notices. Deliverable: a short claims map: for each headline claim, what the design can and cannot support, and what would count against it. It can happen any time before the collection freeze; the analysis-stage evaluators do not block it.
+1. Commit the amendment and the tooling (done for revision 2); refresh the project-knowledge copy of the amendment.
+2. Free rehearsal of `h1_baseline_replication.py` on the n=30 smoke baseline: **done.** 0.0% unmatched citations (0 of 1,189 items): the real agent writes exact field names. About 7.9 citations per decision (the uncapped prompt, versus 1a's 2-3). Top-5 overlap 4 of 5; the trigger did not fire.
+3. Build and freeze, before any result is examined: `evaluate_h5.py` **done** (reviewed and revised: confidence in "behavior changed", the three-text inertia rule, a completeness refusal; 22 check groups, 15 of 15 deliberate bugs caught, definitions added to the amendment); remaining: `evaluate_h6.py`, `evaluate_h7.py`, `evaluate_h8.py` (analysis stage).
+4. Before the baseline: `freeze_manifest.py write --stage collection`; generate everything once (see the reproducibility note); run the baseline; run `h1_baseline_replication.py` (for real, to the real path).

@@ -54,7 +54,8 @@ ARTIFACTS: Dict[str, List[str]] = {
         "1b_DESIGN_AMENDMENT_1.md",
     ],
     "analysis": [
-        "evaluate_h5.py", "evaluate_h6.py", "evaluate_h7.py", "evaluate_h8.py",
+        "evaluate_h5.py", "validate_h5_schema.py", "test_evaluate_h5.py",
+        "evaluate_h6.py", "evaluate_h7.py", "evaluate_h8.py",
     ],
 }
 
