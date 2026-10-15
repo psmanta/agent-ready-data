@@ -86,13 +86,13 @@ EDGES: List[Edge] = [
     Edge("last_purchase_days_ago", "last_purchase_date", "strict", "last_purchase_date = snapshot - last_purchase_days_ago days"),
     Edge("churn_risk_score", "is_at_risk", "strict", "is_at_risk = churn_risk_score >= 0.60"),
     Edge("support_tickets_open", "recently_contacted_support", "strict", "recently_contacted_support = support_tickets_open >= 1"),
-    Edge("name", "email", "strict", "email = name lowercased, spaces -> '.', apostrophes removed, + '@example.com'"),
     # --- bounded ---
     Edge("support_tickets_open", "support_tickets_closed", "bounded", "support_tickets_closed >= support_tickets_open"),
     Edge("last_purchase_days_ago", "tenure_months", "bounded", "1 <= last_purchase_days_ago <= min(365, 30 * tenure_months)"),
     Edge("last_login_days_ago", "last_purchase_days_ago", "bounded", "max(0, purchase - 7) <= login <= purchase + 30"),
     Edge("last_login_days_ago", "tenure_months", "bounded", "last_login_days_ago <= 30 * tenure_months"),
     Edge("is_vip", "customer_segment", "bounded", "is_vip implies customer_segment == high_value"),
+    Edge("name", "email", "bounded", "the email's local part contains the customer's surname (last name token; honorifics and suffixes excluded)"),
     # --- approximate ---
     Edge("total_spend", "total_purchases", "approximate", "total_spend ~ total_purchases * avg_order_value * U(0.90, 1.10)", "spend_triad"),
     Edge("total_spend", "avg_order_value", "approximate", "total_spend ~ total_purchases * avg_order_value * U(0.90, 1.10)", "spend_triad"),
@@ -179,8 +179,16 @@ def _strict_checks(c, snap) -> Dict[str, bool]:
         "last_purchase_days_ago~last_purchase_date": c["last_purchase_date"] == (snap - timedelta(days=c["last_purchase_days_ago"])).date().isoformat(),
         "churn_risk_score~is_at_risk": c["is_at_risk"] == (c["churn_risk_score"] >= 0.60),
         "support_tickets_open~recently_contacted_support": c["recently_contacted_support"] == (c["support_tickets_open"] >= 1),
-        "name~email": c["email"] == c["name"].lower().replace(" ", ".").replace("'", "") + "@example.com",
     }
+
+
+def _surname_in_email(c) -> bool:
+    """The claim made in the amendment: the email's local part contains the customer's SURNAME (the last alphabetic
+    token of the name, honorifics and suffixes excluded)."""
+    skip = {"mr", "mrs", "ms", "miss", "dr", "prof", "jr", "sr", "ii", "iii", "iv", "v", "md", "dds", "phd", "dvm"}
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z]+", c["name"])]
+    core = [t for t in tokens if t not in skip] or tokens
+    return core[-1] in c["email"].split("@")[0].lower()
 
 
 def _bounded_checks(c) -> Dict[str, bool]:
@@ -191,6 +199,7 @@ def _bounded_checks(c) -> Dict[str, bool]:
         "login_vs_purchase": max(0, lp - 7) <= lg <= lp + 30,
         "login<=30*tenure": lg <= t30,
         "is_vip=>high_value": (not c["is_vip"]) or c["customer_segment"] == "high_value",
+        "email local part contains the surname": _surname_in_email(c),
     }
 
 

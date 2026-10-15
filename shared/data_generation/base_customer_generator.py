@@ -53,8 +53,10 @@ Methodology Notes
 """
 
 import argparse
+import hashlib
 import json
 import random
+import re
 import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -201,6 +203,30 @@ def _generate_segment_fields(segment: str, rng: random.Random) -> Dict[str, Any]
 # CORE CUSTOMER GENERATION
 # ============================================================================
 
+# Emails are synthetic but must not LOOK synthetic: an address at example.com (a domain reserved for documentation)
+# tells a model it is looking at test data, and the dither engine's own wrong emails already use real consumer
+# providers, so corrupting an email would otherwise REMOVE that cue (a confound inside H1's identity test).
+# The address is derived from a HASH of (seed, customer_id, name), never from the random streams, so adding it
+# changes no other field. Any resemblance to a real address is coincidence; the data is never used for outreach.
+_HONORIFICS = {"mr", "mrs", "ms", "miss", "dr", "prof"}
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v", "md", "dds", "phd", "dvm"}
+_EMAIL_DOMAINS = (("gmail.com", 0.45), ("yahoo.com", 0.60), ("outlook.com", 0.75),
+                  ("hotmail.com", 0.85), ("icloud.com", 0.95), ("aol.com", 1.00))
+
+
+def synthetic_email(name: str, customer_id: str, seed: int) -> str:
+    """A realistic consumer-provider address whose local part contains the customer's surname."""
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z]+", name)]
+    core = [t for t in tokens if t not in _HONORIFICS and t not in _NAME_SUFFIXES] or tokens
+    first, last = core[0], core[-1]
+    h = hashlib.sha256(f"{seed}|{customer_id}|{name}".encode()).digest()
+    local = (f"{first}.{last}", f"{first}{last}", f"{first[0]}{last}", f"{first}_{last}")[h[0] % 4]
+    digits = 100 + int.from_bytes(h[1:3], "big") % 9900          # 100..9999
+    r = h[3] / 256.0
+    domain = next(d for d, cum in _EMAIL_DOMAINS if r < cum)
+    return f"{local}{digits}@{domain}"
+
+
 def generate_base_customer(
     customer_id: str,
     seed: int,
@@ -240,7 +266,7 @@ def generate_base_customer(
 
     # --- Identity fields ---
     name  = fk.name()
-    email = name.lower().replace(" ", ".").replace("'", "") + "@example.com"
+    email = synthetic_email(name, customer_id, seed)
     phone = fk.phone_number()
     dob   = fk.date_of_birth(minimum_age=18, maximum_age=75).isoformat()
 

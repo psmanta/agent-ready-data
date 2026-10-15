@@ -54,7 +54,9 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 import hashlib
-from datetime import datetime
+import platform
+import subprocess
+from datetime import datetime, timezone
 
 # Resolve shared directory — 1b_dithering -> 01_authoritative -> experiments -> project_root
 current_file = Path(__file__).resolve()
@@ -201,6 +203,65 @@ class BusinessDecisionAgent(BaseExperimentAgent):
             api_key=api_key,
         )
         self.system_prompt = SYSTEM_PROMPT
+        self.configured_max_tokens = max_tokens
+
+    def run_fingerprint(self, input_path: Path, output_path: Path, n_records: int,
+                        max_records, resume: bool) -> Dict[str, Any]:
+        """Everything needed to tell two sessions apart later: the model snapshot, settings, the prompt hash,
+        library and code versions, the input file hash and the command line. Best effort: it never stops a run."""
+        import importlib.metadata as md
+
+        def version(pkg):
+            try:
+                return md.version(pkg)
+            except Exception:
+                return None
+
+        def git(*args):
+            try:
+                r = subprocess.run(["git", *args], cwd=Path(__file__).resolve().parent,
+                                   capture_output=True, text=True, timeout=10)
+                return r.stdout.strip() if r.returncode == 0 else None
+            except Exception:
+                return None
+
+        def sha256_file(path):
+            try:
+                return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            except Exception:
+                return None
+
+        commit = git("rev-parse", "HEAD")
+        return {
+            "event": "started",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.configured_max_tokens,
+            "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(),
+            "agent_file_sha256": sha256_file(__file__),
+            "input_file": str(input_path),
+            "input_file_sha256": sha256_file(input_path),
+            "input_records": n_records,
+            "output_file": str(output_path),
+            "resume": resume,
+            "max_records": max_records,
+            "packages": {"anthropic": version("anthropic"), "langchain-anthropic": version("langchain-anthropic"),
+                         "langchain-core": version("langchain-core"), "python": platform.python_version()},
+            "git_commit": commit,
+            "git_dirty": None if commit is None else bool(git("status", "--porcelain", "--untracked-files=no")),
+            "argv": list(sys.argv),
+            "platform": platform.platform(),
+        }
+
+    @staticmethod
+    def _append_meta(meta_path: Path, entry: Dict[str, Any]) -> None:
+        """One JSON line per event, appended: a resumed run keeps every session's fingerprint."""
+        try:
+            with open(meta_path, "a") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception as e:  # the fingerprint must never stop an experiment
+            print(f"  WARNING: could not write the run fingerprint to {meta_path}: {e}")
 
     @staticmethod
     def _input_hash(record: Dict[str, Any]) -> str:
@@ -294,6 +355,13 @@ Respond with ONLY the JSON object described in your instructions. No other text.
                 if max_records is not None and len(records) >= max_records:
                     break
 
+        meta_path = output_path.with_suffix(".meta.jsonl")
+        try:
+            fingerprint = self.run_fingerprint(input_path, output_path, len(records), max_records, resume)
+        except Exception as e:  # best effort only
+            fingerprint = {"event": "started", "fingerprint_error": str(e)}
+        self._append_meta(meta_path, fingerprint)
+
         kept: Dict[str, Dict[str, Any]] = {}
         mode = "w"
         if resume and output_path.exists():
@@ -378,6 +446,10 @@ Respond with ONLY the JSON object described in your instructions. No other text.
             "temperature":   self.temperature,
             "timestamp":     datetime.now().isoformat(),
         }
+
+        self._append_meta(meta_path, {"event": "finished", "finished_at": datetime.now(timezone.utc).isoformat(),
+                                      "processed_this_session": processed, "errors": errors,
+                                      "session_cost_usd": round(session_cost, 4)})
 
         summary_path = output_path.with_suffix(".summary.json")
         with open(summary_path, "w") as f:

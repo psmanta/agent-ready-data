@@ -123,4 +123,48 @@ assert "WARNING: overwriting" in buf.getvalue() and len(load(WORK / "plain.jsonl
 assert silently(A.main) == 0 and len(load(WORK / "cli.jsonl")) == 4 and len(Fake.calls) == 4; ok("the command line honors --max_records (4 records, 4 model calls)")
 Fake.reset(); sys.argv = ["x", "--input", str(IN), "--output", str(WORK / "cli.jsonl"), "--resume"]
 assert silently(A.main) == 0 and len(load(WORK / "cli.jsonl")) == 12 and len(Fake.calls) == 8; ok("the command line honors --resume (8 missing records sent, 12 in the file)")
+print("T7  the run fingerprint (a record of what produced each output file)")
+Fake.reset(); (WORK / "fp.jsonl").unlink(missing_ok=True); (WORK / "fp.meta.jsonl").unlink(missing_ok=True)
+silently(agent().process_file, IN, WORK / "fp.jsonl", max_records=5)
+meta = [json.loads(l) for l in open(WORK / "fp.meta.jsonl")]; st, fin = meta[0], meta[1]
+assert len(meta) == 2 and st["event"] == "started" and fin["event"] == "finished"; ok("one 'started' line and one 'finished' line are written beside the decisions file")
+assert st["system_prompt_sha256"] == PROMPT_SHA256; ok("the fingerprint carries the system-prompt hash, equal to the frozen one")
+assert st["model"] == "claude-haiku-4-5-20251001" and st["temperature"] == 0.0 and st["max_tokens"] == 1024; ok("the model snapshot, temperature and max tokens are recorded")
+assert st["input_file_sha256"] == hashlib.sha256(IN.read_bytes()).hexdigest() and st["input_records"] == 5 and st["max_records"] == 5 and st["resume"] is False; ok("the input file hash, the record count and the flags are recorded")
+assert st["agent_file_sha256"] == hashlib.sha256(Path(A.__file__).read_bytes()).hexdigest(); ok("the agent file's own hash is recorded")
+assert set(st["packages"]) == {"anthropic", "langchain-anthropic", "langchain-core", "python"} and st["packages"]["python"]; assert "argv" in st and "platform" in st and "started_at" in st; ok("library and python versions, the command line, the platform and a UTC start time are recorded")
+assert fin["processed_this_session"] == 5 and fin["errors"] == 0 and "finished_at" in fin; ok("the 'finished' line records what the session processed")
+Fake.reset(); silently(agent().process_file, IN, WORK / "fp.jsonl", resume=True)
+meta = [json.loads(l) for l in open(WORK / "fp.meta.jsonl")]
+assert len(meta) == 4 and meta[2]["resume"] is True and meta[2]["input_records"] == 12 and meta[3]["processed_this_session"] == 7; ok("a resumed run APPENDS its own fingerprint: every session stays on record")
+rows_a = load(WORK / "fp.jsonl"); assert len(rows_a) == 12 and all("system_prompt_sha256" not in r for r in rows_a); ok("the decision rows themselves are unchanged (the fingerprint lives beside them, not in them)")
+_real_run = subprocess.run
+def _boom(*a, **k): raise RuntimeError("git is not available")
+A.subprocess.run = _boom
+try:
+    Fake.reset(); (WORK / "fp2.jsonl").unlink(missing_ok=True); (WORK / "fp2.meta.jsonl").unlink(missing_ok=True)
+    silently(agent().process_file, IN, WORK / "fp2.jsonl", max_records=3)
+finally:
+    A.subprocess.run = _real_run
+m2 = [json.loads(l) for l in open(WORK / "fp2.meta.jsonl")]; assert len(load(WORK / "fp2.jsonl")) == 3 and m2[0]["git_commit"] is None and m2[0]["git_dirty"] is None and m2[0]["system_prompt_sha256"] == PROMPT_SHA256; ok("with git unavailable the run still completes and the fingerprint records git as null")
+(WORK / "ro").mkdir(exist_ok=True); (WORK / "ro" / "fp4.meta.jsonl").mkdir(exist_ok=True)
+buf = io.StringIO(); Fake.reset()
+with contextlib.redirect_stdout(buf): agent().process_file(IN, WORK / "ro" / "fp4.jsonl", max_records=2)
+assert len(load(WORK / "ro" / "fp4.jsonl")) == 2 and "WARNING: could not write the run fingerprint" in buf.getvalue(); ok("a fingerprint that cannot be written (a directory is in the way) only warns; the experiment and its decisions are unaffected")
+
+Fake.reset(); (WORK / "fp5.jsonl").unlink(missing_ok=True); (WORK / "fp5.meta.jsonl").unlink(missing_ok=True)
+silently(A.BusinessDecisionAgent(api_key="dummy", log_dir=WORK / "logs", model="claude-test-model", temperature=0.3, max_tokens=777).process_file, IN, WORK / "fp5.jsonl", max_records=2)
+m5 = json.loads(open(WORK / "fp5.meta.jsonl").readline()); assert m5["model"] == "claude-test-model" and m5["temperature"] == 0.3 and m5["max_tokens"] == 777
+ok("NON-default settings are recorded as they were (model, temperature 0.3, max tokens 777): the fingerprint reports what was used, not what is usual")
+_orig_fp = A.BusinessDecisionAgent.run_fingerprint
+def _raise(self, *a, **k): raise RuntimeError("fingerprint exploded")
+A.BusinessDecisionAgent.run_fingerprint = _raise
+try:
+    Fake.reset(); (WORK / "fp6.jsonl").unlink(missing_ok=True); (WORK / "fp6.meta.jsonl").unlink(missing_ok=True)
+    silently(agent().process_file, IN, WORK / "fp6.jsonl", max_records=3)
+finally:
+    A.BusinessDecisionAgent.run_fingerprint = _orig_fp
+m6 = json.loads(open(WORK / "fp6.meta.jsonl").readline()); assert len(load(WORK / "fp6.jsonl")) == 3 and "exploded" in m6["fingerprint_error"]
+ok("even if building the fingerprint blows up, the run completes and the failure is itself recorded")
+
 print(f"\n{n_checks} check groups passed")

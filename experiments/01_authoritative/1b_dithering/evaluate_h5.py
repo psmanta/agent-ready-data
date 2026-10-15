@@ -127,8 +127,10 @@ def audit_stamp(tables: Dict[str, Any]) -> Dict[str, Any]:
 
 def discover_conditions(out_dir: Path) -> List[str]:
     root = out_dir / "conditions"
+    # a control (control.json, such as the zero-dither h0_clean_rerun_<k>) is not a hypothesis condition
     return sorted(p.name for p in root.iterdir()
-                  if (p / "decisions.jsonl").exists() and (p / "dither_reference.json").exists())
+                  if (p / "decisions.jsonl").exists() and (p / "dither_reference.json").exists()
+                  and not (p / "control.json").exists())
 
 
 def single_field(records: List[Dict[str, Any]]) -> Optional[str]:
@@ -312,7 +314,8 @@ def evaluate_h5(out_dir: Path, gt_path: Path, baseline_reference_path: Path, jud
                 condition_ids: Optional[List[str]] = None, allow_incomplete: bool = False) -> Dict[str, Any]:
     ground_truth = json.load(open(gt_path))
     baseline = load_baseline_customers(baseline_reference_path)
-    generated = sorted(p.name for p in (out_dir / "conditions").iterdir() if (p / "dither_reference.json").exists())
+    generated = sorted(p.name for p in (out_dir / "conditions").iterdir()
+                       if (p / "dither_reference.json").exists() and not (p / "control.json").exists())   # controls are not hypothesis conditions
     missing = [c for c in generated if not (out_dir / "conditions" / c / "decisions.jsonl").exists()]
     if condition_ids is None and missing and not allow_incomplete:
         raise SystemExit(f"H5 reads every dithered condition, but {len(missing)} have no decisions yet: "

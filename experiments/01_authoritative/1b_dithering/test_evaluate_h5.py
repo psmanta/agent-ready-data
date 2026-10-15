@@ -55,7 +55,7 @@ COND_FIELDS = ["h4_churn_risk_score_plausible", "h4_churn_risk_score_implausible
 H4 = [c for c in COND_FIELDS if c.startswith("h4_")]
 EXPECTED_CLASS = {"h4_churn_risk_score_plausible": "soft_only", "h4_churn_risk_score_implausible": "soft_only",
                   "h4_churn_risk_score_implausible_isolated": "strict", "h4_total_spend_implausible": "approximate",
-                  "h4_tenure_months_implausible": "strict", "h1_individual_email": "strict", "h3_individual_refund_rate": "none", "h1_individual_is_vip": "bounded"}
+                  "h4_tenure_months_implausible": "strict", "h1_individual_email": "bounded", "h3_individual_refund_rate": "none", "h1_individual_is_vip": "bounded"}
 P_DRIFT = {c: 0.25 + 0.05 * i for i, c in enumerate(COND_FIELDS)}
 P_KW = {c: 0.10 + 0.05 * i for i, c in enumerate(COND_FIELDS)}
 VOCAB = ["customer", "account", "engagement", "history", "recent", "purchases", "loyalty", "profile", "value", "retention",
@@ -254,7 +254,7 @@ assert "Descriptive only" in rc["caveat"]; ok("the non-independence caveat trave
 
 print("W7  completeness: H5 reads EVERY dithered condition")
 gt_p, base_p = WORK / "gt.json", WORK / "baseline_reference.json"
-missing_expected = sorted(d.name for d in (OUT / "conditions").iterdir() if (d / "dither_reference.json").exists() and not (d / "decisions.jsonl").exists())
+missing_expected = sorted(d.name for d in (OUT / "conditions").iterdir() if (d / "dither_reference.json").exists() and not (d / "decisions.jsonl").exists() and not (d / "control.json").exists())
 assert len(missing_expected) == 55 - len(COND_FIELDS), len(missing_expected)
 try:
     with contextlib.redirect_stdout(io.StringIO()): E.evaluate_h5(OUT, gt_p, base_p, None)
@@ -332,6 +332,16 @@ for k_, n_ in ((0, 183), (183, 183), (0, 10), (7, 183), (0, 200), (200, 200)):
 ok("zero-detection and all-detection cells (k = 0 and k = n, at several n) pass the H4 and H5 validators: a real run WILL contain such cells")
 bad_ = {"k": 5, "n": 10, "rate": 0.5, "ci": [0.6, 0.9]}; i4, i5 = [], []; V4._walk(dict(bad_), "x", i4); V._rate_block(dict(bad_), "x", i5)
 assert i4 and i5; ok("an interval that genuinely excludes its rate is still caught by both")
+
+print("W11 controls are not hypothesis conditions")
+src_c = OUT / "conditions" / COND_FIELDS[0]; ctl = OUT / "conditions" / "h0_clean_rerun_1"
+assert (ctl / "control.json").exists() and (ctl / "dither_reference.json").exists() and not (ctl / "decisions.jsonl").exists()   # the generator makes it by default
+shutil.copy(src_c / "decisions.jsonl", ctl / "decisions.jsonl")
+assert "h0_clean_rerun_1" not in E.discover_conditions(OUT); Rc = E.evaluate_h5(OUT, WORK / "gt.json", WORK / "baseline_reference.json", None, None, allow_incomplete=True)
+assert "h0_clean_rerun_1" not in Rc["conditions"] and "h0_clean_rerun_1" not in Rc["conditions_missing_decisions"] and Rc["n_conditions"] == len(COND_FIELDS) + 1  # +1: the pf condition W9 added
+ok("a control directory (control.json) is skipped by discovery and appears in no H5 table or missing-list")
+(ctl / "control.json").unlink(); assert "h0_clean_rerun_1" in E.discover_conditions(OUT); ok("without its control.json the same directory WOULD be treated as a condition: the marker is what excludes it")
+(ctl / "control.json").write_text(json.dumps({"control": True}))
 
 print("W6  labels, validator, command line")
 eq(R["status_by_section"], E.STATUS, "status"); assert [k for k, v in R["status_by_section"].items() if v == "primary"] == ["detection_crosstab"]; ok("only the detection cross-tab is labeled primary")

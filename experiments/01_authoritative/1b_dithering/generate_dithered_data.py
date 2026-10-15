@@ -468,6 +468,47 @@ def generate_all_conditions(
 # MAIN
 # ============================================================================
 
+def generate_clean_reruns(output_dir: Path, n_reruns: int) -> list:
+    """Zero-dither CONTROL conditions (macro-review decisions D20 and D25).
+
+    The baseline customers, unchanged, as ordinary conditions named h0_clean_rerun_<k>. Run in the same randomized
+    windows as every dithered condition, each measures how often the SAME input gets a DIFFERENT decision purely
+    because of when it was run: the no-dithering reference for every drift result. The agent-facing records are
+    identical to the baseline's (only the record_id prefix differs, and the agent never sees record_id), so their
+    input hashes equal the baseline's. A control.json marks each so the hypothesis evaluators skip them.
+    """
+    base_path = output_dir / "baseline" / "agent_input" / "baseline_customers.jsonl"
+    map_path = output_dir / "baseline" / "record_id_map.json"
+    baseline = [json.loads(line) for line in open(base_path) if line.strip()]
+    id_map = json.load(open(map_path))
+    made = []
+    for k in range(1, n_reruns + 1):
+        cid = f"h0_clean_rerun_{k}"
+        cond_dir = output_dir / "conditions" / cid
+        cond_dir.mkdir(parents=True, exist_ok=True)
+        agent_facing, reference = [], []
+        for rec in baseline:
+            a = dict(rec)
+            a["record_id"] = rec["record_id"].replace("BASE_", "COND_", 1)
+            agent_facing.append(a)
+            reference.append({**a, "customer_id": id_map[rec["record_id"]], "_dither_applied": False,
+                              "_dither_fields": [], "_dither_blocked": [], "_dither_original": {},
+                              "_dither_config": cid, "_dither_operator": {}, "_dither_direction": {},
+                              "_dither_mechanism_style": {}})
+        with open(cond_dir / "agent_input.jsonl", "w") as f:
+            for record in agent_facing:
+                f.write(json.dumps(record, default=str) + "\n")
+        with open(cond_dir / "dither_reference.json", "w") as f:
+            json.dump(reference, f, indent=2, default=str)
+        with open(cond_dir / "control.json", "w") as f:
+            json.dump({"control": True, "kind": "clean_rerun", "rerun_index": k, "reference": "baseline",
+                       "note": "zero dithering; the same input as the baseline, run in the same windows as every "
+                               "dithered condition"}, f, indent=2)
+        print(f"  control {cid}: {len(agent_facing)} unchanged baseline records")
+        made.append(cid)
+    return made
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate ground truth, baseline, and dither condition data for 1b",
@@ -501,6 +542,9 @@ Examples:
     parser.add_argument("--condition", type=str, default=None,
         help="Regenerate only this specific condition_id")
 
+    parser.add_argument("--clean-reruns", type=int, default=1,
+                        help="zero-dither control conditions (h0_clean_rerun_<k>) to generate alongside the dithered "
+                             "ones (default 1; 0 for none)")
     args = parser.parse_args()
     output_dir = Path(args.out)
 
@@ -520,6 +564,8 @@ Examples:
         generate_all_conditions(customers, output_dir, only_condition=args.condition,
                                 min_exposure=args.min_exposure,
                                 allow_invalid=args.allow_invalid)
+        if args.condition is None and args.clean_reruns > 0:
+            generate_clean_reruns(output_dir, args.clean_reruns)
 
     print(f"\n{'#'*60}")
     print("# DONE")

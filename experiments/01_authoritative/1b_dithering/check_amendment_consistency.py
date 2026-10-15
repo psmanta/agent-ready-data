@@ -10,7 +10,7 @@ in code, and exits 1 on any disagreement. It also lints the keyword list (an unp
 let a pattern match inside "unquestionably") and refuses known stale phrases.
 
     python check_amendment_consistency.py                  # from 1b_dithering/
-    python check_amendment_consistency.py --selftest       # corrupts the text 20 ways; each must be caught
+    python check_amendment_consistency.py --selftest       # corrupts the text 23 ways; each must be caught
     python check_amendment_consistency.py --skip_artifact_files   # when not run inside the repo layout
 
 Checks
@@ -118,10 +118,10 @@ def run_checks(text: str, skip_files: bool, base_dir: Path = HERE) -> List[Tuple
     check("conditions: total equals the engine's (and the text says so)", total == 55 and f"**{total} (up to" in cost, f"engine total {total}")
 
     # ---- costs ---------------------------------------------------------------------------------
-    lo, hi, hi2 = (round(n * PER_RECORD_COST) for n in (60_000, 61_000, 66_000))
-    blo, bhi, bhi2 = (round(n * PER_RECORD_COST / 2) for n in (60_000, 61_000, 66_000))
+    lo, hi, hi2 = (round(n * PER_RECORD_COST) for n in (61_000, 62_000, 67_000))
+    blo, bhi, bhi2 = (round(n * PER_RECORD_COST / 2) for n in (61_000, 62_000, 67_000))
     check("costs: standard-price ranges follow from the call counts", f"${lo}–{hi}" in cost and f"${hi2} standard" in cost, f"expected ${lo}–{hi} and ${hi2}")
-    check("costs: Batch-price ranges follow from the call counts", f"${blo}–{bhi}" in cost.replace("$70–71", f"${blo}–{bhi}") and f"${bhi2} Batch" in cost, f"expected ${blo}–{bhi} and ${bhi2}")
+    check("costs: Batch-price ranges follow from the call counts", f"${blo}–{bhi}" in cost and f"${bhi2} Batch" in cost, f"expected ${blo}–{bhi} and ${bhi2}")
     check("costs: the H1 conditional adds at most 5,000 calls (about $12)", "5,000 calls (about $12" in cost and round(5000 * PER_RECORD_COST) == 12)
 
     # ---- H1 rule -------------------------------------------------------------------------------
@@ -143,6 +143,12 @@ def run_checks(text: str, skip_files: bool, base_dir: Path = HERE) -> List[Tuple
     check("judge: PROMPT_ID in the amendment equals classifier_prompt.PROMPT_ID", f"PROMPT_ID {cp.PROMPT_ID}" in h5 and cp.PROMPT_ID == "v3-be665399de", cp.PROMPT_ID)
     check("H5: the evaluator's definitions are stated (behavior changed incl. confidence; inertia needs three texts; completeness refusal)",
           "### Definitions the evaluator fixes" in h5 and "OR the dithered confidence lies outside" in h5 and "at least three matching baseline texts" in h5 and "--allow_incomplete" in h5 and "Perturbed means changed" in h5 and "Class-by-drift matrices" in h5 and "Audit stamp" in h5)
+    repro = section(text, "A Note on Data Generation Reproducibility")
+    check("data: the synthetic-realism paragraph is stated (example.com replaced by realistic consumer emails; coincidence; no outreach)",
+          "**Synthetic realism.**" in repro and "example.com" in repro and "coincidence" in repro and "no address is ever used for outreach" in repro)
+    coll = section(text, "Collection Design: Windows, Controls and Fingerprints")
+    check("collection: the design states its finding, the randomized block, the control, the fingerprint and the guarantees",
+          all(x in coll for x in ("3 of 30", "randomized complete block", "five different blocks", "h0_clean_rerun_1", "control.json", "adds 1,000 calls", ".meta.jsonl", "writes nothing for a condition that is incomplete", "does not remove window effects")))
     check("judge: model and temperature stated", "claude-haiku-4-5-20251001" in h5 and "temperature 0" in h5)
     check("judge: the decided scope is the eight H4 conditions, and the engine has exactly eight H4 conditions",
           "Judged scope (decided): the eight H4 conditions" in h5 and counts["h4"] == 8, f"engine H4 count {counts['h4']}")
@@ -193,7 +199,9 @@ def selftest(text: str) -> int:
         ("a keyword pattern deleted", lambda s: s.replace("\\bdata problem\\b\n", "", 1)),
         ("a condition count changed", lambda s: s.replace("| H3 | 8 | 15 |", "| H3 | 8 | 14 |", 1)),
         ("the total changed", lambda s: s.replace("**55 (up to 61 with both conditionals)**", "**56 (up to 61 with both conditionals)**", 1)),
-        ("a cost range changed", lambda s: s.replace("$139–142", "$130–142", 1)),
+        ("a cost range changed", lambda s: s.replace("$142–144", "$130–144", 1)),
+        ("the randomized-block design removed", lambda s: s.replace("randomized complete block", "sequential run", 1)),
+        ("the baseline-runs-across-windows guarantee reworded", lambda s: s.replace("five different blocks", "one block", 1)),
         ("the judge prompt id changed", lambda s: s.replace("PROMPT_ID v3-be665399de", "PROMPT_ID v3-00000000aa", 1)),
         ("a legacy comparison field dropped from the rule", lambda s: s.replace("`tenure_months`, `avg_resolution_time_hours`, `refund_rate`)", "`tenure_months`, `refund_rate`)", 1)),
         ("a field dropped from 1a's list in the rule", lambda s: s.replace("`nps_score`, `lifetime_value_estimate` and `support_tickets_open`.", "`nps_score` and `support_tickets_open`.", 1)),
@@ -205,6 +213,7 @@ def selftest(text: str) -> int:
         ("the confidence part of 'behavior changed' removed", lambda s: s.replace("OR the dithered confidence lies outside", "and nothing else lies outside", 1)),
         ("the 'perturbed means changed' guarantee removed", lambda s: s.replace("Perturbed means changed", "Perturbed means selected", 1)),
         ("the audit stamp paragraph removed", lambda s: s.replace("**Audit stamp.**", "**Provenance.**", 1)),
+        ("the synthetic-realism paragraph removed", lambda s: s.replace("**Synthetic realism.**", "**Notes.**", 1)),
         ("the judged scope reworded", lambda s: s.replace("Judged scope (decided): the eight H4 conditions", "Judged scope (decided): every dithered condition", 1)),
         ("the two-stage commitment removed", lambda s: s.replace("No result from any dithered condition is examined until", "Results may be examined before", 1)),
         ("a stale statement reintroduced", lambda s: s.replace("### Revision 2", "- Total condition count increased from 21 to 46–47\n\n### Revision 2", 1)),

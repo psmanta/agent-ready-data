@@ -148,6 +148,8 @@ Faker computes `date_of_birth` relative to the current date, so the same seed pr
 
 **Binding procedure.** (1) Generate the baseline and every condition in ONE invocation on one day. The baseline-first gate gates agent calls, not generation. (2) Record the sha256 of `canonical_customers.json` in the freeze manifest and in the H1 replication manifest. (3) Never rerun a generation command afterwards. (4) Conditional conditions (the H1 replication conditions, H8b) are generated from the stored canonical file and refuse to run if its hash changed. (5) An interrupted agent run continues with `--resume`, which keeps decisions already made on identical input and refuses to mix decisions made on different input. Changing how `dob` is produced is deliberately not done: it risks shifting the random stream for every field generated after it.
 
+**Synthetic realism.** A model that suspects it is being tested may behave differently, so obvious test-data cues are removed where the data allows. Customer emails were originally built at `example.com`, a domain reserved for documentation. They are now realistic consumer-provider addresses (gmail, yahoo, outlook, hotmail, icloud, aol) derived from a hash of the customer, never from the random streams, so no other field changed: regenerating all 55 conditions with the old and new generator, 50 are identical apart from the email field, and the 5 that corrupt email draw different but equally valid values for their other fields, because the engine's domain swap consumes a different number of random numbers. The change also removes a confound inside H1's identity test: the engine's wrong emails already used real providers, so corrupting an `example.com` email would have removed the cue and not just made the data wrong. This mitigates, and does not eliminate, the cue: names, addresses and phone numbers remain generated. All customer data is synthetic, any resemblance of an email to a real address is coincidence, and no address is ever used for outreach.
+
 ---
 
 ## A Note on Statistical Methodology
@@ -984,7 +986,7 @@ human audit calibrates the judge (see the H5 section).
 
 **Hypothesis, not finding.** In the first smoke runs both genuine detections came from cross-referencing a sibling field (total spend against lifetime value; tenure against the account-creation date), not from noticing an odd number against a stated range. That suggests detection may track relational coherence more than the plausibility of a single value. It rests on two cases, and it is confounded by the engine's own propagation (see "Propagated vs. isolated corruption"). The isolated-corruption arm is the manipulated test. The table below makes the rest of the design checkable without looking at outcomes.
 
-**Derived only from the design, never from outcomes.** `field_redundancy.py` lists, for each of the 25 fields any condition dithers, the sibling fields in the same record that an agent could cross-check against, from the generator's own formulas and the engine's propagation list. Tiers, strongest first: **strict** (the sibling is an exact deterministic function of the field, or vice versa: `tenure_months` and `account_created_date`, `last_purchase_days_ago` and `last_purchase_date`, `churn_risk_score` and `is_at_risk`, `support_tickets_open` and `recently_contacted_support`, `name` and `email`); **bounded** (a hard constraint inferable from what the fields mean, such as `support_tickets_closed >= support_tickets_open` or `is_vip` implying the high-value segment); **approximate** (a generator formula with a bounded random factor: `total_spend` is `total_purchases` times `avg_order_value` times a factor in 0.90-1.10; `lifetime_value_estimate` is `total_spend` times a segment-specific multiplier band); **soft** (`customer_segment` sets a hard band on the field in the generator, but the band is never stated to the agent). With `recompute_derived` on (every condition except the two isolated arms) the engine recomputes some siblings after dithering (`is_at_risk` after `churn_risk_score`, `recently_contacted_support` after `support_tickets_open`), which removes that contradiction. A field's **class** is the strongest tier among siblings the engine does NOT recompute:
+**Derived only from the design, never from outcomes.** `field_redundancy.py` lists, for each of the 25 fields any condition dithers, the sibling fields in the same record that an agent could cross-check against, from the generator's own formulas and the engine's propagation list. Tiers, strongest first: **strict** (the sibling is an exact deterministic function of the field, or vice versa: `tenure_months` and `account_created_date`, `last_purchase_days_ago` and `last_purchase_date`, `churn_risk_score` and `is_at_risk`, `support_tickets_open` and `recently_contacted_support`); **bounded** (a hard constraint inferable from what the fields mean, such as `support_tickets_closed >= support_tickets_open`, `is_vip` implying the high-value segment, or the local part of an email containing the customer's surname); **approximate** (a generator formula with a bounded random factor: `total_spend` is `total_purchases` times `avg_order_value` times a factor in 0.90-1.10; `lifetime_value_estimate` is `total_spend` times a segment-specific multiplier band); **soft** (`customer_segment` sets a hard band on the field in the generator, but the band is never stated to the agent). With `recompute_derived` on (every condition except the two isolated arms) the engine recomputes some siblings after dithering (`is_at_risk` after `churn_risk_score`, `recently_contacted_support` after `support_tickets_open`), which removes that contradiction. A field's **class** is the strongest tier among siblings the engine does NOT recompute:
 
 | Field | Strict | Bounded | Approximate | Soft (segment band) | Engine recomputes | Class (default) | Class (isolated arm) | Range stated to agent |
 |---|---|---|---|---|---|---|---|---|
@@ -993,7 +995,7 @@ human audit calibrates the judge (see the H5 section).
 | `avg_order_value` | - | - | total_purchases, total_spend | segment | - | approximate | approximate | - |
 | `avg_resolution_time_hours` | - | - | - | - | - | none | none | - |
 | `churn_risk_score` | is_at_risk | - | - | segment | is_at_risk | soft_only | strict | 0-1 |
-| `email` | name | - | - | - | - | strict | strict | - |
+| `email` | - | name | - | - | - | bounded | bounded | - |
 | `email_open_rate` | - | - | - | segment | - | soft_only | soft_only | 0-1 |
 | `fraud_risk_score` | - | - | - | segment | - | soft_only | soft_only | 0-1 |
 | `has_active_subscription` | - | - | - | - | - | none | none | - |
@@ -1002,7 +1004,7 @@ human audit calibrates the judge (see the H5 section).
 | `last_login_days_ago` | - | last_purchase_days_ago, tenure_months | - | - | - | bounded | bounded | - |
 | `last_purchase_days_ago` | last_purchase_date | last_login_days_ago, tenure_months | - | - | - | strict | strict | - |
 | `lifetime_value_estimate` | - | - | total_spend | - | - | approximate | approximate | - |
-| `name` | email | - | - | - | - | strict | strict | - |
+| `name` | - | email | - | - | - | bounded | bounded | - |
 | `nps_score` | - | - | - | segment | - | soft_only | soft_only | 0-10 |
 | `payment_failures` | - | - | - | segment | - | soft_only | soft_only | - |
 | `phone` | - | - | - | - | - | none | none | - |
@@ -1014,7 +1016,7 @@ human audit calibrates the judge (see the H5 section).
 | `total_purchases` | - | - | avg_order_value, purchase_frequency_days, total_spend | segment | - | approximate | approximate | - |
 | `total_spend` | - | - | avg_order_value, lifetime_value_estimate, total_purchases | - | - | approximate | approximate | - |
 
-For H4's three fields the table reproduces the design logic: `tenure_months` is strict in both columns (the uncorrected `account_created_date`); `total_spend` is approximate in both (lifetime value; purchases times order value); `churn_risk_score` is **soft_only by default** (the engine rewrites its strict sibling) and **strict in the isolated arm**, which is exactly the manipulation that arm exists to test. `email` is derived from `name`, so `h1_individual_email` dithers one half of a strict pair.
+For H4's three fields the table reproduces the design logic: `tenure_months` is strict in both columns (the uncorrected `account_created_date`); `total_spend` is approximate in both (lifetime value; purchases times order value); `churn_risk_score` is **soft_only by default** (the engine rewrites its strict sibling) and **strict in the isolated arm**, which is exactly the manipulation that arm exists to test. The local part of `email` contains the customer's surname, so `h1_individual_email` dithers one half of a bounded pair.
 
 **Direction matters.** Strict relations expose every change to the field. Bounded, approximate and soft relations expose a corruption only when it pushes the value outside the region the relationship allows (`support_tickets_open` dithered downward never violates `closed >= open`). The table says which siblings exist, not that every corruption is exposed.
 
@@ -1500,7 +1502,7 @@ from the main pipeline, but does not belong in the core hypothesis set.
 
 (H1=14 + H2=12 + H3=15 + H4=8 + H7=4 + H8a=2 = 55; H8b adds 0-1 and the H1 replication rule adds 0-5, so 55-61.) The count of 55 is checked against the engine's own `build_all_conditions()` by `check_amendment_consistency.py`.
 
-At n=1,000 customers per condition: 55,000 dither-condition agent calls without conditionals (up to 61,000 with both), plus the 5,000-call primary baseline (5 runs × 1,000 customers).
+At n=1,000 customers per condition: 55,000 dither-condition agent calls without conditionals (up to 61,000 with both), plus the 5,000-call primary baseline (5 runs × 1,000 customers) and the 1,000-call clean re-run control (see Collection Design).
 
 Boundary expansion cost is a genuine open unknown, not a placeholder estimate. The mechanism now covers three tiers 
 (`deeply_boundary`, `lightly_boundary`, `tied_no_majority`, per the `aggregate_baseline.py` tied vote fix) with an adaptive 
@@ -1509,9 +1511,27 @@ not the earlier flat "minimum 25 runs" estimate this section previously cited. E
 combined boundary population turns out to be once the primary baseline actually runs. See `RESEARCH_NOTES.md`'s open 
 question tracking this same population split as a stochasticity finding in its own right.
 
-Total: roughly **60,000–61,000 agent calls before boundary expansion and without conditional conditions**, up to **66,000** if both conditional rules fire.
+Total: roughly **61,000–62,000 agent calls before boundary expansion and without conditional conditions** (including the 1,000-call clean re-run control), up to **67,000** if both conditional rules fire.
 
-At 1a's observed per-record cost (~$0.00232/record): approximately **$139–142 at standard API pricing without conditionals, $70–71 with Batch API's 50% discount**; the H1 replication rule adds at most 5,000 calls (about $12 standard, $6 Batch), so the upper bound is about **$153 standard, $77 Batch**. The judge adds about $0.001 per judged record: about $8 for the eight H4 conditions (the decided scope), about $55–61 if it were ever run on every dithered condition (not planned). This project is self-funded, and that is a standing constraint on every cost decision.
+At 1a's observed per-record cost (~$0.00232/record): approximately **$142–144 at standard API pricing without conditionals, $71–72 with Batch API's 50% discount**; the H1 replication rule adds at most 5,000 calls (about $12 standard, $6 Batch), so the upper bound is about **$155 standard, $78 Batch**. The judge adds about $0.001 per judged record: about $8 for the eight H4 conditions (the decided scope), about $55–61 if it were ever run on every dithered condition (not planned). This project is self-funded, and that is a standing constraint on every cost decision.
+
+---
+
+## Collection Design: Windows, Controls and Fingerprints
+
+**Why this section exists.** In an October 2026 smoke check of 30 customers, identical input (identical input hashes and token counts), the same dated model snapshot, the same prompt and the same settings produced different decisions in different time windows for 3 of 30 customers (exact 95% range 2.1% to 26.5%), while each window was perfectly consistent within itself (all five runs agreed). It was not our code (the agent from before our last patch gave the same answers as the current one on the same day), not a library upgrade (installed before the first session), and not the data change being tested (it did not replicate). The cause is on the serving side and is not ours to inspect. Two consequences follow. The five baseline runs are one window repeated, not five independent looks, so "stable" would mean stable within a window. And if a condition were run in its own window, a window effect would be indistinguishable from a data-quality effect.
+
+**The design: a randomized complete block.** `plan_collection.py` deals every call into 48 blocks (windows): the five baseline runs, every dithered condition and the control below. Each block holds a random slice of everything, each condition is spread over all blocks to within one task, tasks are shuffled inside a block, and blocks are run in sequence. A window effect therefore lands as noise on every condition and not as a bias on whichever condition ran in a bad window. A simulation in `test_collection.py` shows the point: for conditions with no real effect, the spread of drift between conditions is much smaller under this scheduling than when each condition occupies its own window.
+
+**Baseline runs across windows.** Each customer's five baseline runs land in five different blocks, a fixed stride (blocks divided by runs, 9 for 48 blocks) apart, so the stability tiers (stable, lightly boundary, deeply boundary, tied) that H6 and the rest of the design rely on measure stability across windows. Boundary expansion, if needed, remains a follow-up step run after the primary collection; each extra batch is a further window.
+
+**The clean re-run control.** `generate_dithered_data.py` also writes `h0_clean_rerun_1`: the baseline customers with zero dithering (agent-facing records identical to the baseline's, so the input hashes are equal), marked by a `control.json` file. It is not one of the 55 dithered conditions (the engine's count is unchanged), every hypothesis evaluator skips controls, and it adds 1,000 calls. It is run in the same randomized blocks as everything else, so its drift from the baseline reference measures how often identical input gets a different decision purely because of when it ran. That is reported beside every drift result as the no-dithering reference. Whether any primary test is re-anchored to it is decided before the analysis freeze; any adjustment using it is labelled as such, and the unadjusted result is always reported.
+
+**The run fingerprint.** The agent writes a `.meta.jsonl` file beside every decisions file, with one line when a session starts and one when it finishes (appended, so a resumed run keeps every session): the model snapshot, temperature, max tokens, the system-prompt hash, the agent file's hash, the input file's hash and record count, the anthropic, langchain-anthropic and langchain-core versions, the python version, the git commit and whether it was dirty, the command line, the platform and a UTC time. It is best effort and never stops a run. It exists so a difference between two sessions can be diagnosed, and so a future model change can be regression-tested against what was run here.
+
+**Mechanics.** The plan is deterministic from its seed (recorded), is written once, and records the hash of every source input file, of every block file and of the task list; every tool refuses a plan that no longer matches. Each task carries its own task id in the block file's `record_id`, because the same `record_id` appears in all conditions; the agent never shows `record_id` to the model, so the prompt is unchanged. `run_collection.py` runs blocks through the unchanged agent with `--resume`, retries tasks that are missing or invalid, can be sharded across workers, and requires `--yes` before making real calls. `collect_results.py` routes the rows back into the files the evaluators already read, with the original `record_id` restored and `collection_block` and `collection_task_id` added, and writes nothing for a condition that is incomplete. A task counts only if it has a real priority on exactly the input the plan expects.
+
+**What this does not do.** It does not remove window effects; it stops them from aliasing with conditions and measures them. It cannot tell us how long a window lasts, so the number of blocks is a judgment (48 by default, about an hour each for one sequential worker). It controls what we can schedule, not how the model is served.
 
 ---
 
@@ -1527,6 +1547,11 @@ This amendment is pre-registered only through its commit. Before the 5,000-call 
 - `generate_dithered_data.py`
 - `generate_h1_replication_conditions.py`
 - `check_and_generate_h8b.py`
+- `collection_common.py`
+- `plan_collection.py`
+- `run_collection.py`
+- `collect_results.py`
+- `test_collection.py`
 - `aggregate_baseline.py`
 - `refine_boundary_convergence.py`
 - `run_boundary_expansion.py`

@@ -1807,3 +1807,111 @@ existence), self-test 20 of 20.
 Hashes: evaluate_h5.py f6c213483c94fd06; validate_h5_schema.py e756bdf955c8df00;
 validate_h4_schema.py 6d8992f1bdd330bc; test_evaluate_h5.py 35f56e12ddbc8679;
 1b_DESIGN_AMENDMENT_1.md 48a1cd3607d86a45; check_amendment_consistency.py 1321381049ac65f9.
+
+
+## Email realism: example.com replaced (macro-review decision D17), implemented and verified
+
+**Why.** Every customer email ended in example.com, a domain reserved for documentation, which can tell a model it is
+looking at test data. It was also a confound inside H1's identity test: the engine's own wrong emails already use real
+providers (its "moderate" tier swaps to gmail, outlook, yahoo or icloud; "significant" gives user48213@gmail.com), so
+corrupting an example.com email REMOVED the test-data cue. Option 2 (a prompt note that emails were standardized) was
+rejected: it points the agent at data manipulation and changes a frozen, hint-free prompt.
+
+**What changed.** `synthetic_email()` in base_customer_generator.py builds a realistic consumer-provider address (patterns
+such as first.last, firstlast, flast, first_last, plus 3-4 digits) whose local part contains the surname, derived from a
+sha256 of (seed, customer_id, name), never from the random streams. Honorifics and suffixes are excluded from the name.
+
+**Proof.** (1) 200 customers, old versus new generator: exactly one field differs (email, all 200); all new emails valid,
+unique, free of example.com, deterministic. (2) All 55 conditions at n=60: 50 are identical to the old output apart from the
+email field; the 5 that corrupt email (h1_category_identity, h1_distributed, h1_individual_email, h7_breadth_all,
+h8a_pair1_identity_account_status) draw different but equally valid values for their OTHER fields, because the engine's
+domain swap draws from a list whose length depends on the current domain, so it consumes a different number of random
+numbers. The design is unchanged; no data had been collected.
+
+**Knock-on.** The name-to-email relation moves from strict to bounded in field_redundancy.py, the amendment's redundancy
+table and prose (regenerated), and the H5 test's expected class. The redundancy module's own check caught a bug in my first
+version of the new check (it ignored name tokens shorter than three letters, so "Ann Wu" with the initial-plus-surname
+pattern failed: 3 of 3,000 customers); it now tests the surname itself, with honorific, suffix, apostrophe and short-surname
+cases covered. The amendment gained a "Synthetic realism" paragraph (all data synthetic; any resemblance to a real address is
+coincidence; never used for outreach), and the checker verifies it (27 checks; self-test 21 of 21).
+
+**Limits.** This mitigates the cue and does not eliminate it: names, addresses and phones remain generated. The smoke data on
+the owner's machine used example.com and is now stale; an optional before/after smoke comparison (30 customers x 5 runs,
+about 150 calls) would test whether the cue mattered. A grep of the old smoke decisions for synthetic, fake, placeholder, demo
+and test-data language found zero hits in all five runs (a weak, verbal-only check).
+
+Hashes: base_customer_generator.py 7dd3fa6b3537e0c5; field_redundancy.py 09db8cd05ac9e470;
+test_evaluate_h5.py 0e5f62a503b62920; 1b_DESIGN_AMENDMENT_1.md 59d1b1f4dbb89ce1;
+check_amendment_consistency.py 80b012c5f9098dad.
+
+
+## Email A/B smoke test (30 customers x 5 runs): result, and a cross-session wobble it exposed
+
+make_email_ab.py builds two arms from the EXISTING smoke baseline input, changing only the email (asserted per record; the new
+email equals what the new generator produces for that customer); compare_email_ab.py compares them. Three arms: OLD (the original
+smoke), A (old emails, re-run the same day as B), B (new emails). Cost about $0.77 for the ten new runs.
+
+**Result.** Per-arm means are indistinguishable (confidence 0.812 / 0.813 / 0.812; output tokens 248 / 245 / 244; zero test or
+domain wording). Within a session the agent is near-deterministic: 0.0% disagreement among the five runs in A and in B. One of 30
+customers had a different decision in B than in A, consistently across all five runs (exact 95% range for the share the email
+could change: 0.1% to 17.2%). Between OLD and A, with NO change, 2 of 30 customers' majority decisions changed (0.8% to 22.1%). So the email's
+effect is not distinguishable from background session-to-session wobble, and the cue is not visibly material. The test only
+excludes large effects (its sensitivity: about 70% to catch a shift in 20% of customers, about 95% for 30%).
+
+**The side discovery.** Identical input gave a different decision in a different session for about 2 of 30 customers. The design
+had no control for this: none of the 55 conditions is a zero-dither re-run, and the baseline and the dithered conditions are run
+at different times. Proposed (macro-review D20): a clean re-run condition and a tight collection window. The evidence is thin (2 of
+30), which is exactly why measuring it on 1,000 customers is cheap insurance.
+
+compare_email_ab.py was extended after the run: exact binomial interval (Clopper-Pearson; the bootstrap interval is too
+optimistic for rare events) and a "who changed" section showing votes, confidence and email wording per flipped customer.
+Hashes: make_email_ab.py 20c7ec7d8f9e05c3; compare_email_ab.py a5a9c1edc177b778. Both are one-off diagnostics, not
+frozen artifacts.
+
+
+## Bisect result: our patch is exonerated, the email flip did not replicate, and the window effect is real
+
+Static check of commit 3ff1fee: only business_decision_agent.py changed (not shared/agents); the diff lines on the request path are an
+input-hash refactor (same values: the input hashes matched on all 30 records) and the new --resume code. Replication of the three flagged
+customers (5 runs per arm, arms alternated in time, about $0.12): BD0D was HIGH x5 in the original smoke, A, A-again and the PRE-patch agent;
+MEDIUM x5 only in B; B-again (same input, today) was HIGH x5. 1725 and 6D9F, MEDIUM-leaning on October 3, were HIGH x5 in every arm since
+October 14, including the pre-patch agent. So: the patch did not change behavior; the email had no detectable effect (0 of 30; exact range
+0.0% to 11.6%); and identical input, model string, prompt and settings give different decisions in different windows for about 3 of 30
+customers (exact range 2.1% to 26.5%), deterministic within a window. Not ours; on the serving side. Consequences for the design are in the
+macro-review log (D25): the five baseline runs are one window repeated, so stability tiers and drift are window-confounded unless the
+collection is scheduled to prevent it.
+
+
+## The window-aware collection (macro-review D20, D23, D25): built and verified
+
+**Built.** (1) A run fingerprint in the agent: a best-effort .meta.jsonl beside every decisions file with model snapshot, temperature, max tokens,
+system-prompt hash, agent-file hash, input-file hash, library and python versions, git commit and dirty flag, command line and platform, appended
+per session (agent test: 33 check groups; 12 deliberate bugs caught, two of which exposed real test gaps: only default settings were tested, and the
+outer safety guard was untested). (2) The clean re-run control: generate_dithered_data.py writes h0_clean_rerun_<k> (default one), the baseline
+customers with zero dithering and identical input hashes, marked control.json; every hypothesis evaluator skips controls. (3) The collection
+tools: plan_collection.py, run_collection.py, collect_results.py, collection_common.py, test_collection.py (48 check groups; 29 of 30 deliberate bugs
+caught, the survivor being an equivalent mutant: shuffling the ORDER of conditions changes which blocks get the leftover tasks, not any guarantee).
+
+**What the tests found.** The H5 evaluator's completeness scan did not skip controls, so running H5 before the control's decisions were collected
+would have refused to run and named the control as missing (fixed; test W11 and a mutation guard it). Two of my mutation batteries were void
+because of a bug in my own helper script (it replaced the file name instead of the target text), which is why a "survivor" count means nothing
+until a mutation that is known to fail has been seen to fail.
+
+**Why the design is believable.** Record ids are not unique across conditions (the same COND_ id is in all 55), so each task gets its own task id in
+the block file; the planner's input hash equals the real agent's for every task; the same seed gives a byte-identical plan; and the simulation
+shows that with conditions that have NO real effect, between-condition drift spread is 0.014 under the randomized schedule versus 0.048 when each
+condition occupies its own window, and subtracting the clean re-run control recovers "no effect" under the randomized schedule but not under the
+naive one.
+
+**Amendment.** New section "Collection Design: Windows, Controls and Fingerprints" (finding, design, control, fingerprint, mechanics, limits); call
+counts and costs updated for the control's 1,000 calls (61,000 to 62,000 calls, up to 67,000; about $142 to $144 standard, $71 to $72 Batch, up to
+$155 and $78); the checker verifies the section and the arithmetic (28 checks; self-test 23 of 23); the five new files are in the collection freeze
+list (36 files).
+
+**Run at scale.** About 61,000 calls; at 20 calls a minute one worker needs about 50 hours, so use --shard. Generate the real data in ONE invocation
+on one day (the dob issue), into a fresh directory, never regenerating.
+
+Hashes: business_decision_agent.py 8902d94e5a83df4b; generate_dithered_data.py 8996ae098d5dd271; evaluate_h5.py 38567aa1f431ee68;
+collection_common.py 0eac2342cd6df2f5; plan_collection.py 82e2dd8ccbca5419; run_collection.py 90c9c271407ce74a;
+collect_results.py 643c45f66747253a; test_collection.py e9c494c363c6ce75; freeze_manifest.py 46f7454a35ea5609;
+1b_DESIGN_AMENDMENT_1.md 145cfdc800847999; check_amendment_consistency.py e60a3fdbb216683f.

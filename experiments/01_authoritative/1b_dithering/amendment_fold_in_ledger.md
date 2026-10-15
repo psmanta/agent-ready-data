@@ -76,6 +76,8 @@ belong in the write-up when data exists.
 | Prompt Continuity cited `business_decision_agent_1b.py` | wrong file | corrected |
 | `freeze_manifest.py` stripped the leading space of `git status --porcelain`, mis-naming the first dirty file | wrong name in a refusal message | fixed (found by its own test) |
 | `validate_h4_schema.py` and `validate_h5_schema.py` compared a Wilson interval to its rate strictly; `wilson_interval(0, 183)` has a lower bound of 1.7e-18 above the rate 0.0 | a cell with zero detections would be reported as structurally invalid in the real run (the H4 validator is already committed) | 1e-9 tolerance in both; regression group W10 |
+| The data's emails were all `@example.com`, a documentation-reserved domain, and the engine's wrong emails used real providers | a possible test-data cue, and a confound inside H1's identity test (corrupting an email removed the cue) | realistic consumer-provider emails derived by hash; only the email field changes (proved); name-email link is now bounded; the redundancy check's first version ignored short surnames (3 of 3,000) and was fixed |
+| The H5 evaluator's completeness scan listed every directory with a dither_reference.json, controls included | running H5 before the control's decisions were collected would refuse and name the control as missing | the scan skips directories with control.json (found by the new control test; a mutation guards it) |
 
 Edits removed from existing sections, exactly: nine keyword patterns; the old cost/count lines; four stale
 Summary bullets; the old filename; one phrase in Prompt Continuity. Nothing else was deleted.
