@@ -1,0 +1,36 @@
+pilot population audit, run 2026-10-22T06:22:43Z, commit d6dea48
+command: python3 audit_input_populations.py --root . --generator generate_dithered_data.py --seeds 777 42 20261016 43
+
+Found 22 agent input files under .
+
+
+By top-level directory (n, source):
+  .                                                          n=30 seed 777 x2
+  experiments_output                                         n=30 seed 777 x4, n=100 seed 42 x16
+
+Run fingerprints (*.meta.jsonl): what each run recorded about its input
+  none found (runs made before the fingerprint existed leave no record)
+
+Run outputs: real agent runs versus fixtures, and which population each saw
+  (a FIXTURE is a results file with placeholder rows or no model field: plumbing tests that no model ever saw)
+  experiments_output/conditions/h1_individual_churn_risk_score/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h1_individual_nps_score/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h1_individual_support_tickets_open/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h2_churn_risk_score_mag15pct/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h2_tenure_months_mag15pct/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h2_total_spend_mag15pct/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_individual_payment_failures/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_pair1_churn_nps_correlated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_pair1_churn_nps_uncorrelated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_pair3_support_payment_correlated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_pair3_support_payment_uncorrelated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_reference_pair_correlated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h3_reference_pair_uncorrelated/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h4_churn_risk_score_plausible/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h4_tenure_months_plausible/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+  experiments_output/conditions/h4_total_spend_plausible/decisions.jsonl  (100 rows, 0 placeholder, 100 with a model) -> REAL: seed 42
+
+VERDICT
+  inputs : NOT all from seed 777: n=30 seed 777 x6, n=100 seed 42 x16
+  runs   : REAL seed 42 x16, REAL seed 777 x33
+  REAL agent runs saw: NOT only seed 777: seed 42, seed 777
