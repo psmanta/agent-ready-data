@@ -14,7 +14,7 @@ This is independent research. Although I work in the AI industry and may use thi
 
 AI agents operate under an implicit contract with their data. For an agent to make reliable decisions, that data must satisfy a set of conditions that practitioners do not make explicit.
 
-The industry increasingly recognizes pieces of this such as the importance of data quality, data context, data freshness, etc. These are typically Gaddressed in isolation. What's missing is a holistic framework that treats them as clauses of a single contract, and asks: 'what happens to agent decisions when any one of those clauses is violated?'
+The industry increasingly recognizes pieces of this such as the importance of data quality, data context, data freshness, etc. These are typically addressed in isolation. What's missing is a holistic framework that treats them as clauses of a single contract, and asks: 'what happens to agent decisions when any one of those clauses is violated?'
 
 The current framing is *necessary but not sufficient*.
 
@@ -53,7 +53,7 @@ Each experiment follows a consistent pipeline:
 
 - **Agent scope:** The agent is a decision-making engine. It receives data, reasons over it, and produces a structured judgment. It has no tools, no memory between calls, and no ability to take action in the world. It represents the cognitive core of a fuller agentic system. I believe this research is valid and relevant because this decision layer is present in virtually every agentic pipeline. If the decision engine is compromised by bad data, everything downstream is compromised as well.
 
-- **Model:** `claude-haiku-4-5-20251001` at temperature 0.0 for reproducibility in Phase 1. The model used may evolve across the series to reflect advances in the field. Each experiment documents the specific model version used.
+- **Model:** `claude-haiku-4-5-20251001` at temperature 0.0 for reproducibility in Phase 1. The choice is deliberate: this series measures how an agent's decisions depend on its data, not how capable any one model is, and a cost-efficient model keeps self-funded research sustainable. The design works for any model; the numbers are for the one named. The model used may evolve across the series, and each experiment documents the specific model version used.
 
 - **Confidence calibration:** Agent confidence is self-reported and has not been calibrated against ground truth (an objectively correct answer defined independently of the agent). A flat confidence curve does not imply accurate decisions, it may indicate the agent has no signal that something is wrong. Ground truth calibration is future work.
 
@@ -124,20 +124,24 @@ agent-ready-data/
 ├── .env                               ← required, gitignored (ANTHROPIC_API_KEY)
 ├── .gitignore                         ← excludes experiment outputs, .env, drafts
 ├── shared/
-│   └── agents/
-│       ├── base_agent.py
-│       ├── llm_factory.py
-│       └── model_pricing.json
+│   ├── agents/                        ← base agent, LLM factory, model pricing
+│   ├── data_generation/               ← ground-truth customer generator, dither engine, DAMA validator
+│   ├── review_tools/                  ← offline human-review forms
+│   └── tests/
 └── experiments/
     └── 01_authoritative/
         ├── README.md                  ← pillar overview
-        └── 1a_dedup/
-            ├── README.md              ← experiment methodology
-            ├── 1a_RESULTS.md          ← experiment findings
-            ├── generate_customer_data.py
-            ├── business_decision_agent.py
-            ├── evaluate_decision_quality.py
-            └── run_agent_all_levels.sh
+        ├── 1a_dedup/                  ← complete
+        │   ├── README.md              ← experiment methodology
+        │   ├── 1a_RESULTS.md          ← experiment findings
+        │   └── ...                    ← generator, agent, evaluator, run script
+        └── 1b_dithering/              ← in progress
+            ├── README.md              ← start here: what 1b is and which document to read
+            ├── 1b_DESIGN.md           ← original design (pre-registration)
+            ├── 1b_DESIGN_AMENDMENT_1.md  ← the current, binding design (H1 to H8b)
+            ├── macro_review.md        ← plain-language review and decision log
+            ├── wording_sheet.md       ← every public statement about 1b comes from here
+            └── ...                    ← generator, agent, evaluators (evaluate_h1 to h5), tests
 ```
 
 ---
@@ -161,7 +165,7 @@ The following experiments are planned based on current research directions. This
 | Pillar | Experiment | Status |
 |--------|-----------|--------|
 | Authoritative | 1a: Dedup impact on agent decisions | ✅ Complete |
-| Authoritative | 1b: Dithering — untrustworthy values | 🔲 Next |
+| Authoritative | 1b: Dithering — untrustworthy values | 🔄 In progress: pre-registration (design and analysis fixed before the main run) |
 | Authoritative | 1c: Data quality vs data quantity | 🔲 Backlog |
 | Authoritative | 1d: Conflicting authorities | 🔲 Backlog |
 | Authoritative | 1e: Incompleteness vs noise | 🔲 Backlog |

@@ -16,7 +16,7 @@ If decision quality is how we keep score, authoritative data is where the game b
 | ID | Name | Status | Key Question |
 |----|------|--------|-------------|
 | 1a | Dedup | ✅ Complete | How do duplicate records affect agent decision quality? |
-| 1b | Dithering | 🔲 Next | What happens when field values are present but don't reflect the truth? |
+| 1b | Dithering | 🔄 In progress (pre-registration) | What happens when field values are present but don't reflect the truth? |
 | 1c | Quality vs Quantity | 🔲 Backlog | Does a larger dataset with noise outperform a smaller clean dataset? |
 | 1d | Conflicting Authorities | 🔲 Backlog | What happens when two authoritative source systems disagree on the same customer? |
 | 1e | Incompleteness vs Noise | 🔲 Backlog | Are missing fields and untruthful fields equivalent failure modes for decision quality? |
@@ -43,7 +43,7 @@ A note on pipeline stability: The evaluation pipeline (agent + evaluator) is kep
 
 *To be populated as experiments complete.*
 
-The potential here is significant. Decision Quality as a framework allows us to compare the *cost* of different authoritative data failures directly. I identified a 14% decision inconsistency tax from duplication. That's interesting standalone but comparing it against a potential X% tax from dithering, and whatever Conflicting Authorities introduces, is where the most actionable insights will surface. Rather than treating each data condition as an isolated data quality problem, these experiments build toward a unified view of how different authoritative data conditions affect the trustworthiness of agent decisions.
+The potential here is significant. Decision Quality as a framework allows us to compare the *cost* of different authoritative data failures directly. I identified a decision inconsistency tax of about 1 in 7 from duplication. That's interesting standalone but comparing it against a potential X% tax from dithering, and whatever Conflicting Authorities introduces, is where the most actionable insights will surface. Rather than treating each data condition as an isolated data quality problem, these experiments build toward a unified view of how different authoritative data conditions affect the trustworthiness of agent decisions.
 
 ---
 
