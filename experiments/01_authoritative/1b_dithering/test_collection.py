@@ -157,7 +157,7 @@ cp = sh("plan_collection.py", "--experiments_output", EO, "--out_dir", WORK / "p
 print("R1  the executor: dry run, confirmation, retries, idempotence, shards, tamper detection")
 MARK = WORK / "marker.txt"; ENV = {"FAKE_MARKER": str(MARK), "FAKE_FAIL_FIRST": "1"}
 # The fake agent stands in for the model through the standard path; batch mode is tested in test_batch_runner.py.
-run = lambda *extra, env=ENV: sh("run_collection.py", "--plan_dir", PLAN_DIR, "--agent", FAKE, "--mode", "standard", "--no_caffeinate", *extra, env=env)
+run = lambda *extra, env=ENV: sh("run_collection.py", "--plan_dir", PLAN_DIR, "--agent", FAKE, "--mode", "standard", "--no_caffeinate", "--allow_version_mismatch", *extra, env=env)
 r = run("--dry_run"); assert r.returncode == 0 and "nothing was sent" in r.stdout and not MARK.exists(); ok("--dry_run reports blocks, tasks and cost and sends nothing")
 r = run(); assert r.returncode == 2 and "--yes" in r.stdout and not MARK.exists(); ok("without --yes it refuses to make API calls")
 r = run("--yes", "--blocks", "1-2"); assert r.returncode == 0, r.stdout[-500:]

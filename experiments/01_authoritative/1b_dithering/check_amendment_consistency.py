@@ -173,7 +173,9 @@ def run_checks(text: str, skip_files: bool, base_dir: Path = HERE) -> List[Tuple
     fz = section(text, "Pre-Registration Freeze")
     for stage, marker, nxt in (("collection", "**Collection stage**", "**Analysis stage**"), ("analysis", "**Analysis stage**", "**Deliberately not frozen")):
         block = fz[fz.index(marker):fz.index(nxt)]
-        listed = [m.replace("shared/data_generation/", fm.SHARED) for m in re.findall(r"- `([^`]+)`", block)]
+        # repo-root paths in the amendment ("shared/...", "requirements.txt") are relative to 1b_dithering in the manifest
+        listed = [("../../../" + m) if (m.startswith("shared/") or m == "requirements.txt") else m
+                  for m in re.findall(r"- `([^`]+)`", block)]
         check(f"freeze: the amendment's {stage} list equals freeze_manifest.ARTIFACTS", listed == fm.ARTIFACTS[stage], f"{len(listed)} vs {len(fm.ARTIFACTS[stage])}")
         if stage == "collection" and not skip_files:
             missing = [p for p in fm.ARTIFACTS[stage] if not (base_dir / p).exists()]

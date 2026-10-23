@@ -20,7 +20,8 @@ class LLMFactory:
         model: str,
         temperature: float = 0,
         max_tokens: int = 1000,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        default_headers: Optional[dict] = None,
     ):
         """
         Create LLM instance based on model name
@@ -49,11 +50,13 @@ class LLMFactory:
         
         # Anthropic models
         if any(x in model_lower for x in ['claude', 'anthropic']):
+            kwargs = {"default_headers": default_headers} if default_headers else {}
             llm = ChatAnthropic(
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                anthropic_api_key=api_key
+                anthropic_api_key=api_key,
+                **kwargs,   # e.g. a pinned anthropic-version header (1b: business_decision_agent.PINNED_HEADERS)
             )
             
             return llm

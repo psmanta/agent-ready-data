@@ -35,8 +35,10 @@ from typing import Any, Dict, List, Optional
 SHARED = "../../../shared/data_generation/"
 ARTIFACTS: Dict[str, List[str]] = {
     "collection": [
-        # the agent and its prompt
+        # the agent and its prompt, and the shared code and pinned libraries that build its request
         "business_decision_agent.py",
+        "../../../shared/agents/base_agent.py", "../../../shared/agents/llm_factory.py", "../../../shared/agents/model_pricing.json",
+        "../../../requirements.txt",
         # data generation
         SHARED + "base_customer_generator.py", SHARED + "dither_engine.py", SHARED + "validate_dama_dimensions.py",
         "generate_dithered_data.py", "generate_h1_replication_conditions.py", "check_and_generate_h8b.py",

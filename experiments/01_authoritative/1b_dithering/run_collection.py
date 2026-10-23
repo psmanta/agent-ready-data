@@ -116,6 +116,8 @@ def main() -> int:
                     help="batch (default; Message Batches API, half price) or standard (one call at a time; diagnostics)")
     ap.add_argument("--poll_seconds", type=float, default=60.0, help="batch mode: seconds between status checks")
     ap.add_argument("--no_caffeinate", action="store_true", help="do not keep the machine awake (macOS)")
+    ap.add_argument("--allow_version_mismatch", action="store_true",
+                    help="run even if the installed request libraries differ from the pinned versions (never for confirmatory data)")
     ap.add_argument("--cost_per_call", type=float, default=0.00256, help="standard price per call, for the estimate only")
     ap.add_argument("--dry_run", action="store_true", help="show what would run; send nothing")
     ap.add_argument("--yes", action="store_true", help="confirm that real API calls should be made")
@@ -150,6 +152,13 @@ def main() -> int:
         print("❌ this would make real API calls. Re-run with --yes to confirm (or --dry_run to just look).")
         return 2
 
+    import business_decision_agent as BDA
+    mismatches = BDA.request_stack_mismatches()
+    if mismatches and not a.allow_version_mismatch:
+        print("❌ the request libraries differ from the pinned versions (business_decision_agent.PINNED_PACKAGES):\n   "
+              + "\n   ".join(mismatches) + "\n   Install the pinned versions (requirements.txt), or pass --allow_version_mismatch "
+              "for a non-confirmatory run. Nothing was sent.")
+        return 2
     keep_awake(a.no_caffeinate)
     failed = []
     for b in todo:

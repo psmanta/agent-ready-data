@@ -146,7 +146,7 @@ def append_meta(meta_path: Path, entry: Dict[str, Any]) -> None:
 
 def default_client():
     import anthropic
-    return anthropic.Anthropic()
+    return anthropic.Anthropic(default_headers=A.PINNED_HEADERS)   # the same pinned API version as the standard path
 
 
 def _message_text(message) -> str:

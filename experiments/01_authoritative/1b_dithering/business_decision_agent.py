@@ -52,7 +52,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 import hashlib
 import platform
 import subprocess
@@ -177,6 +177,28 @@ Output format (JSON only, no other text):
 
 DEFAULT_MAX_TOKENS = 1024
 
+# The request stack, pinned. Anthropic removed `temperature` in API version 2026-10-21 (requests on that version that set
+# it get a 400), and this design depends on temperature 0. The SDK chooses the anthropic-version header it sends, so an
+# SDK upgrade could silently move every call to a version that rejects the request. Both paths therefore send this header
+# explicitly, and run_collection.py refuses a real run when the installed request libraries differ from PINNED_PACKAGES.
+ANTHROPIC_API_VERSION = "2023-06-01"
+PINNED_HEADERS = {"anthropic-version": ANTHROPIC_API_VERSION}
+PINNED_PACKAGES = {"anthropic": "0.121.0", "langchain-anthropic": "1.5.4", "langchain-core": "1.5.3"}
+
+
+def request_stack_mismatches() -> List[str]:
+    """Installed versions of the request libraries that differ from PINNED_PACKAGES (empty list: all match)."""
+    import importlib.metadata as md
+    out = []
+    for pkg, want in PINNED_PACKAGES.items():
+        try:
+            have = md.version(pkg)
+        except Exception:
+            have = None
+        if have != want:
+            out.append(f"{pkg}: installed {have}, pinned {want}")
+    return out
+
 
 def display_record(record: Dict[str, Any]) -> Dict[str, Any]:
     """The record as the model sees it: record_id is bookkeeping, never shown to the model."""
@@ -250,6 +272,7 @@ class BusinessDecisionAgent(BaseExperimentAgent):
     Customer prioritization agent that extends BaseExperimentAgent.
     Built fresh for 1b — see module docstring for prompt differences from 1a.
     """
+    default_headers = PINNED_HEADERS          # read by BaseExperimentAgent when it builds the LangChain client
 
     def __init__(
         self,
@@ -317,6 +340,8 @@ class BusinessDecisionAgent(BaseExperimentAgent):
             "temperature": self.temperature,
             "max_tokens": self.configured_max_tokens,
             "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(),
+            "anthropic_api_version": ANTHROPIC_API_VERSION,
+            "request_stack_mismatches": request_stack_mismatches(),
             "agent_file_sha256": sha256_file(__file__),
             "input_file": str(input_path),
             "input_file_sha256": sha256_file(input_path),

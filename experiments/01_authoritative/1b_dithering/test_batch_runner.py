@@ -165,7 +165,7 @@ fc = FakeClient(fail_once=fail)
 import run_collection as RC
 BR.default_client = lambda: fc
 def rc(*args):
-    old = sys.argv; sys.argv = ["run_collection.py", "--plan_dir", str(PLAN), "--no_caffeinate", "--poll_seconds", "0", *args]
+    old = sys.argv; sys.argv = ["run_collection.py", "--plan_dir", str(PLAN), "--no_caffeinate", "--poll_seconds", "0", "--allow_version_mismatch", *args]
     try: return quiet(RC.main)
     finally: sys.argv = old
 assert rc("--dry_run") == 0 and fc.messages.batches.creates == 0; ok("a dry run sends nothing")
@@ -187,5 +187,34 @@ n_before = fc.messages.batches.creates
 assert rc("--yes") == 0 and fc.messages.batches.creates == n_before; ok("running again does nothing and sends nothing (idempotent)")
 CR = subprocess.run([sys.executable, "collect_results.py", "--plan_dir", str(PLAN)], capture_output=True, text=True)
 assert CR.returncode == 0, CR.stdout[-500:] + CR.stderr[-500:]; ok("collect_results.py accepts batch-mode output unchanged")
+
+print("Q6  the request stack is pinned (temperature was removed in API version 2026-10-21)")
+import httpx, anthropic
+seen = {}
+def _h(req):
+    seen.update(dict(req.headers))
+    return httpx.Response(200, json={"id": "m", "type": "message", "role": "assistant", "model": MODEL, "content": [{"type": "text", "text": "{}"}],
+                                     "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}})
+import importlib; importlib.reload(BR)
+bc = BR.default_client()
+bc = bc.with_options(http_client=httpx.Client(transport=httpx.MockTransport(_h)))
+bc.messages.create(**A.messages_api_params(recs[0], MODEL, 0.0))
+assert seen.get("anthropic-version") == A.ANTHROPIC_API_VERSION == "2023-06-01"; ok("the batch path's client sends the pinned anthropic-version header on the wire (checked with a mock transport)")
+agent = A.BusinessDecisionAgent(model=MODEL, temperature=0.0)
+assert agent.llm.default_headers.get("anthropic-version") == A.ANTHROPIC_API_VERSION and agent.llm._client.default_headers.get("anthropic-version") == A.ANTHROPIC_API_VERSION
+ok("the standard path's LangChain client carries the same pinned header")
+fp = BR.batch_fingerprint(paths["input"], paths["decisions"], 1, MODEL, 0.0, 1024)
+assert fp["anthropic_api_version"] == "2023-06-01" and isinstance(fp["request_stack_mismatches"], list); ok("the run fingerprint records the API version and any library mismatch")
+saved = dict(A.PINNED_PACKAGES); A.PINNED_PACKAGES["anthropic"] = "0.0.1"
+old = sys.argv; sys.argv = ["run_collection.py", "--plan_dir", str(PLAN), "--no_caffeinate", "--poll_seconds", "0", "--yes", "--blocks", "1"]
+try:
+    n_before = fc.messages.batches.creates
+    for p_ in CC.block_paths(PLAN, 1).values():
+        if p_.name.endswith((".decisions.jsonl", ".batches.json", ".window.json")) and p_.exists(): p_.unlink()
+    BR.default_client = lambda: fc
+    rc_ = quiet(RC.main)
+finally:
+    sys.argv = old; A.PINNED_PACKAGES.clear(); A.PINNED_PACKAGES.update(saved)
+assert rc_ == 2 and fc.messages.batches.creates == n_before; ok("a real run with request libraries other than the pinned ones is refused before anything is sent")
 
 print(f"\n{n_checks} check groups passed")

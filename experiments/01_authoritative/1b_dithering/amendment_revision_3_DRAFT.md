@@ -44,6 +44,7 @@ What is good: H4's design is thorough; the amendment is internally coherent; the
 | R3-13 | Correct H3's stale "applied three times" | | **approved** | H3 |
 | R3-14 | A dated revision history and a revision-specific status line | D69 | **approved** | the status line, a new section |
 | R3-15 | Batch mode for every confirmatory call (one batch per block) | D72 | **approved** | Collection Design; Limits |
+| R3-16 | Pin the request stack (API version header, exact library versions, refusal on mismatch) | D75 | **approved** | Collection Design; Limits; freeze list |
 
 ---
 
@@ -280,6 +281,11 @@ The evaluator's own docstring already says four.
 > *What this does not do (timing, replacing "about an hour each for one sequential worker"):* most batches end within an hour, but Anthropic allows up to 24; the run takes as long as 48 sequential batches take.
 >
 > *Limit (for R3-8):* the pilot runs used the standard path and the confirmatory run uses batch mode. Contrasts within the confirmatory run are unaffected (every arm is batch); pilot-derived observations, already treated as hypotheses, may not transfer exactly. An exploratory smoke check on the 30 pilot customers (`batch_smoke.py`: five copies of each customer in one batch, a standard pass, then a second batch) reports whether copies inside one batch agree as they do inside a standard-mode window; it is disclosed whatever it shows and changes no rule. *Result (22 October, exploratory, pilot only):* copies inside each batch agreed for 30 of 30 customers in both batches, as in the standard pass (30 of 30); majority decisions differed between windows for 1 or 2 of 30 customers (B1 vs B2: 1; batch vs standard: 1 and 2; standard today vs the 3 October pilot: 2), and every difference involved the same two customers. A batch behaved like a window, and the window-to-window jitter sat on a few customers rather than spreading thinly over all of them, which is what the stability tiers and the stable-primary stratification are for. With n = 30 the intervals are wide (2 of 30: exact 95% range 0.8% to 22%); no rule changes.
+
+
+### R3-16. Pin the request stack (approved, D75, 23 October)
+**Why:** Anthropic's model-deprecations page (checked 23 October 2026) lists `temperature` as removed in API version `2026-10-21`: a request on that version that sets it returns a 400 error. The design depends on temperature 0. The SDK chooses the `anthropic-version` header it sends (today `2023-06-01`, in both the installed 0.121.0 and the newest 1.17.0), so an SDK upgrade could move every call to a version that rejects the request, mid-run or in a replication. The model itself is unaffected: `claude-haiku-4-5-20251001` is Active, no deprecation has been announced, and Anthropic gives at least 60 days' notice before a retirement. **Built and tested:** both request paths send `anthropic-version: 2023-06-01` explicitly (`business_decision_agent.PINNED_HEADERS`; the LangChain client through `shared/agents`, the batch client directly); `anthropic`, `langchain-anthropic` and `langchain-core` are pinned to exact versions in `requirements.txt` and in `PINNED_PACKAGES`; `run_collection.py` refuses a real run when the installed versions differ; the run fingerprint records the API version and any mismatch. `test_batch_runner.py` checks the header on the wire with a mock transport. `shared/agents/base_agent.py`, `llm_factory.py`, `model_pricing.json` and `requirements.txt` join the collection-stage freeze list (they build the request; they were not frozen before). The shared-agent change is additive: 1a's agent sends no extra header.
+**Where:** Collection Design, "The run fingerprint" (append one sentence), and Limits (R3-8): "Replication on a later API version, or on a newer model, cannot set temperature at all; the pinned version is recorded, and a replication that cannot pin it is a different instrument."
 
 ---
 

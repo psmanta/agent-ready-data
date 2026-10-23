@@ -88,7 +88,8 @@ class BaseExperimentAgent(ABC):
             model=self.model,
             temperature=self.temperature,
             api_key = self.api_key,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            default_headers=getattr(self, "default_headers", None),   # subclasses may pin request headers
             )
 
 

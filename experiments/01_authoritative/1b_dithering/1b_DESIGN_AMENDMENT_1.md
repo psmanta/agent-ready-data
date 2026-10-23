@@ -1541,6 +1541,10 @@ This amendment is pre-registered only through its commit. Before the 5,000-call 
 
 **Collection stage** (what produces and measures the data):
 - `business_decision_agent.py`
+- `shared/agents/base_agent.py`
+- `shared/agents/llm_factory.py`
+- `shared/agents/model_pricing.json`
+- `requirements.txt`
 - `shared/data_generation/base_customer_generator.py`
 - `shared/data_generation/dither_engine.py`
 - `shared/data_generation/validate_dama_dimensions.py`
