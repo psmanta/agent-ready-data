@@ -167,6 +167,84 @@ Output format (JSON only, no other text):
 # BUSINESS DECISION AGENT
 # ============================================================================
 
+# ============================================================================
+# SHARED REQUEST AND RESULT BUILDERS
+# ============================================================================
+# One source of truth for what the model is sent and how its answer becomes a row. The standard path
+# (BusinessDecisionAgent.make_decision, through LangChain) and the batch path (batch_runner.py, through the
+# Message Batches API) both call these, so the two modes cannot drift apart in prompt or output schema.
+# test_batch_runner.py checks that the batch request equals LangChain's request for the same record.
+
+DEFAULT_MAX_TOKENS = 1024
+
+
+def display_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The record as the model sees it: record_id is bookkeeping, never shown to the model."""
+    return {k: v for k, v in record.items() if k != "record_id"}
+
+
+def build_user_prompt(record: Dict[str, Any]) -> str:
+    """The user message for one customer record (unchanged from the original make_decision)."""
+    return f"""Analyze this customer record and provide your prioritization decision:
+
+{json.dumps(display_record(record), indent=2, default=str)}
+
+Respond with ONLY the JSON object described in your instructions. No other text."""
+
+
+def input_hash(record: Dict[str, Any]) -> str:
+    """md5 of the record exactly as the agent sees it (record_id excluded)."""
+    return hashlib.md5(json.dumps(display_record(record), sort_keys=True, default=str).encode()).hexdigest()
+
+
+def messages_api_params(record: Dict[str, Any], model: str, temperature: float,
+                        max_tokens: int = DEFAULT_MAX_TOKENS) -> Dict[str, Any]:
+    """The Messages API request body for one record: the same fields LangChain's ChatAnthropic sends."""
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": build_user_prompt(record)}],
+    }
+
+
+def parse_decision_text(content: str) -> Dict[str, Any]:
+    """Model text -> decision dict, or a PARSE_ERROR decision. Same parser as the standard path."""
+    try:
+        # _parse_json_response does not use instance state; calling it unbound keeps one parser for both paths.
+        return BaseExperimentAgent._parse_json_response(None, content)
+    except (json.JSONDecodeError, ValueError) as e:
+        return {
+            "business_decision": "PARSE_ERROR",
+            "agent_confidence": 0.0,
+            "decision_reasoning": f"Failed to parse agent response: {e}",
+            "key_factors": [],
+        }
+
+
+def build_result_row(record: Dict[str, Any], decision: Dict[str, Any], *, model: str, cost_usd,
+                     input_tokens, output_tokens, latency_ms, timestamp: str) -> Dict[str, Any]:
+    """One decisions.jsonl row. Field order and names are the 1b schema every evaluator reads."""
+    total = None if input_tokens is None or output_tokens is None else input_tokens + output_tokens
+    return {
+        "record_id":          record.get("record_id", "UNKNOWN"),
+        "customer_segment":   record.get("customer_segment"),
+        "input_hash":         input_hash(record),
+        "business_decision":  decision.get("business_decision"),
+        "agent_confidence":   decision.get("agent_confidence"),
+        "decision_reasoning": decision.get("decision_reasoning"),
+        "key_factors":        decision.get("key_factors", []),
+        "processing_time_ms": None if latency_ms is None else round(latency_ms),   # None in batch mode: no per-request latency
+        "cost_usd":           cost_usd,
+        "model":              model,
+        "input_tokens":       input_tokens,
+        "output_tokens":      output_tokens,
+        "total_tokens":       total,
+        "timestamp":          timestamp,
+    }
+
+
 class BusinessDecisionAgent(BaseExperimentAgent):
     """
     Customer prioritization agent that extends BaseExperimentAgent.
@@ -266,10 +344,7 @@ class BusinessDecisionAgent(BaseExperimentAgent):
     @staticmethod
     def _input_hash(record: Dict[str, Any]) -> str:
         """md5 of the record exactly as the agent sees it (record_id excluded)."""
-        display_record = {k: v for k, v in record.items() if k != "record_id"}
-        return hashlib.md5(
-            json.dumps(display_record, sort_keys=True, default=str).encode()
-        ).hexdigest()
+        return input_hash(record)
 
     def make_decision(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -279,53 +354,22 @@ class BusinessDecisionAgent(BaseExperimentAgent):
         no knowledge of how many records exist, no indication this is
         part of a batch or experiment of any kind.
         """
-        record_id = record.get("record_id", "UNKNOWN")
-
-        # Build the user prompt from the record, excluding record_id itself
-        # (record_id is bookkeeping for us, not something the agent should
-        # reason about or treat as a data field)
-        display_record = {k: v for k, v in record.items() if k != "record_id"}
-
-        user_prompt = f"""Analyze this customer record and provide your prioritization decision:
-
-{json.dumps(display_record, indent=2, default=str)}
-
-Respond with ONLY the JSON object described in your instructions. No other text."""
-
-        input_hash = self._input_hash(record)
-
+        # The prompt, the parser and the row come from the shared builders above, so the batch path
+        # (batch_runner.py) sends and records exactly the same thing. record_id is never shown to the model.
         response = self._invoke_llm(
             system_prompt=self.system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=build_user_prompt(record),
         )
-
-        try:
-            decision = self._parse_json_response(response["content"])
-        except (json.JSONDecodeError, ValueError) as e:
-            decision = {
-                "business_decision": "PARSE_ERROR",
-                "agent_confidence": 0.0,
-                "decision_reasoning": f"Failed to parse agent response: {e}",
-                "key_factors": [],
-            }
-
-        result = {
-            "record_id":          record_id,
-            "customer_segment":   record.get("customer_segment"),
-            "input_hash":         input_hash,
-            "business_decision":  decision.get("business_decision"),
-            "agent_confidence":   decision.get("agent_confidence"),
-            "decision_reasoning": decision.get("decision_reasoning"),
-            "key_factors":        decision.get("key_factors", []),
-            "processing_time_ms": round(response.get("latency_ms", 0)),
-            "cost_usd":           response.get("cost"),
-            "model":              self.model,
-            "input_tokens":       response.get("input_tokens"),
-            "output_tokens":      response.get("output_tokens"),
-            "total_tokens":       response.get("tokens"),
-            "timestamp":          datetime.now().isoformat(),
-        }
-        return result
+        decision = parse_decision_text(response["content"])
+        return build_result_row(
+            record, decision,
+            model=self.model,
+            cost_usd=response.get("cost"),
+            input_tokens=response.get("input_tokens"),
+            output_tokens=response.get("output_tokens"),
+            latency_ms=response.get("latency_ms", 0),
+            timestamp=datetime.now().isoformat(),
+        )
 
     def process_file(self, input_path: Path, output_path: Path,
                      max_records: int = None, resume: bool = False) -> Dict[str, Any]:

@@ -58,7 +58,8 @@ def block_paths(plan_dir: Path, block: int) -> Dict[str, Path]:
     d = Path(plan_dir) / "blocks"
     n = block_name(block)
     return {"input": d / f"{n}.input.jsonl", "decisions": d / f"{n}.decisions.jsonl",
-            "window": d / f"{n}.window.json", "log": d / f"{n}.log"}
+            "window": d / f"{n}.window.json", "log": d / f"{n}.log",
+            "batches": d / f"{n}.batches.json", "meta": d / f"{n}.decisions.meta.jsonl"}
 
 
 def load_plan(plan_dir: Path) -> Tuple[Dict[str, Any], Dict[int, List[Dict[str, Any]]]]:

@@ -2,8 +2,17 @@
 """
 Run the planned blocks through the agent (macro-review decision D25).
 ====================================================================
-Runs business_decision_agent.py on each block file, in block order, with --resume, so an interrupted run loses
-nothing and a re-run only does the missing work. A block is "complete" only when every task in it has a valid decision
+Runs each block file through the agent, in block order, so an interrupted run loses nothing and a re-run only does the
+missing work. Two modes, same prompt, same parser, same output rows (business_decision_agent.py's shared builders):
+
+  --mode batch     (default; every confirmatory call) each block is ONE Message Batches API batch, at half price. The next
+                   block is submitted only after the previous batch has ended, so a block is still one window and the
+                   blocks stay in sequence. The batch id is saved before waiting, so a re-run resumes the same batch.
+  --mode standard  one call at a time through business_decision_agent.py with --resume (diagnostics only: confirmatory
+                   data must not mix modes).
+
+On macOS the runner keeps the machine awake while it runs (caffeinate -i -w <pid>), so idle sleep cannot stall it;
+closing the lid can still sleep a laptop on battery. If it does stop, re-run the same command. A block is "complete" only when every task in it has a valid decision
 (a real priority, on exactly the input the plan expects); anything else is retried, then reported.
 
     python3 run_collection.py --plan_dir experiments_output/collection --dry_run        # count, cost, nothing sent
@@ -11,12 +20,16 @@ nothing and a re-run only does the missing work. A block is "complete" only when
     python3 run_collection.py --plan_dir experiments_output/collection --yes --shard 1/4 # worker 1 of 4
 
 Several workers (--shard i/N) can run at the same time in different terminals: block b belongs to worker
-((b - 1) mod N) + 1, so every worker still touches every part of the design, and windows stay mixed.
+((b - 1) mod N) + 1, so every worker still touches every part of the design, and windows stay mixed. In batch mode
+workers' batches overlap in time; one worker (the default) keeps blocks strictly sequential.
 Each block records when it started and finished (block_NNNN.window.json) for window analysis; the agent also
 writes a run fingerprint (block_NNNN.decisions.meta.jsonl).
 """
 import argparse
 import json
+import os
+import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -25,7 +38,7 @@ from pathlib import Path
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from collection_common import block_paths, block_status, load_plan, sha256_file  # noqa: E402
+from collection_common import block_paths, block_status, load_plan, read_jsonl, sha256_file  # noqa: E402
 
 
 def parse_blocks(spec: str, n_blocks: int) -> List[int]:
@@ -55,6 +68,41 @@ def parse_shard(spec: str):
     return i, n
 
 
+def keep_awake(disabled: bool):
+    """macOS: keep the machine from idle-sleeping while this process lives (caffeinate exits when we do)."""
+    if disabled or platform.system() != "Darwin" or not shutil.which("caffeinate"):
+        return None
+    try:
+        return subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+    except Exception as e:
+        print(f"  (could not start caffeinate: {e}; keep the machine awake yourself)")
+        return None
+
+
+def run_block_batch(a, b, paths, tasks, n_blocks, log_fn=print):
+    """Batch mode for one block: resend whatever is still missing or invalid, one batch per attempt."""
+    import batch_runner as BR
+    records = {r["record_id"]: r for r in read_jsonl(paths["input"])}
+    batches, attempts = [], 0
+    st = block_status(a.plan_dir, b, tasks)
+    # An unfinished batch from an earlier session is collected first, even if the block now looks complete.
+    pending_open = any(not x.get("collected") for x in BR.load_state(paths["batches"]).get("batches", []))
+    while (pending_open or not st["complete"]) and attempts <= a.retries:
+        attempts += 1
+        need = st["missing"] + st["invalid"] + st["bad_hash"]
+        t0 = time.time()
+        res = BR.run_batch([records[t] for t in need], decisions_path=paths["decisions"], state_path=paths["batches"],
+                           meta_path=paths["meta"], input_path=paths["input"], model=a.model,
+                           temperature=a.temperature, poll_seconds=a.poll_seconds, log=log_fn)
+        if res["batch_id"]:
+            batches.append({k: res[k] for k in ("batch_id", "created_at", "ended_at", "counts", "resumed")})
+        pending_open = False
+        st = block_status(a.plan_dir, b, tasks)
+        print(f"  block {b:>3}/{n_blocks}: batch attempt {attempts}, {len(st['valid'])}/{st['n']} valid "
+              f"({time.time() - t0:,.0f}s)")
+    return st, attempts, batches
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--plan_dir", type=Path, default=Path("experiments_output/collection"))
@@ -64,7 +112,11 @@ def main() -> int:
     ap.add_argument("--model", type=str, default="claude-haiku-4-5-20251001")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--retries", type=int, default=2, help="extra attempts per block if tasks are still missing or invalid")
-    ap.add_argument("--cost_per_call", type=float, default=0.00256, help="for the estimate only")
+    ap.add_argument("--mode", choices=("batch", "standard"), default="batch",
+                    help="batch (default; Message Batches API, half price) or standard (one call at a time; diagnostics)")
+    ap.add_argument("--poll_seconds", type=float, default=60.0, help="batch mode: seconds between status checks")
+    ap.add_argument("--no_caffeinate", action="store_true", help="do not keep the machine awake (macOS)")
+    ap.add_argument("--cost_per_call", type=float, default=0.00256, help="standard price per call, for the estimate only")
     ap.add_argument("--dry_run", action="store_true", help="show what would run; send nothing")
     ap.add_argument("--yes", action="store_true", help="confirm that real API calls should be made")
     a = ap.parse_args()
@@ -86,7 +138,8 @@ def main() -> int:
             todo_tasks += st["n"] - len(st["valid"])
             done_tasks += len(st["valid"])
     print(f"plan: {plan['n_tasks']:,} tasks in {n_blocks} blocks | selected {len(chosen)} blocks: "
-          f"{len(chosen) - len(todo)} complete, {len(todo)} to run ({todo_tasks:,} tasks, about ${todo_tasks * a.cost_per_call:,.2f})")
+          f"{len(chosen) - len(todo)} complete, {len(todo)} to run ({todo_tasks:,} tasks, about "
+          f"${todo_tasks * a.cost_per_call * (0.5 if a.mode == 'batch' else 1.0):,.2f} in {a.mode} mode)")
     if a.dry_run:
         print("dry run: nothing was sent.")
         return 0
@@ -97,6 +150,7 @@ def main() -> int:
         print("❌ this would make real API calls. Re-run with --yes to confirm (or --dry_run to just look).")
         return 2
 
+    keep_awake(a.no_caffeinate)
     failed = []
     for b in todo:
         paths = block_paths(a.plan_dir, b)
@@ -105,9 +159,11 @@ def main() -> int:
             failed.append(b)
             continue
         started = datetime.now(timezone.utc).isoformat()
-        attempts = 0
+        attempts, batches = 0, []
         st = block_status(a.plan_dir, b, by_block[b])
-        while not st["complete"] and attempts <= a.retries:
+        if a.mode == "batch":
+            st, attempts, batches = run_block_batch(a, b, paths, by_block[b], n_blocks)
+        while a.mode == "standard" and not st["complete"] and attempts <= a.retries:
             attempts += 1
             cmd = [sys.executable, str(a.agent), "--input", str(paths["input"]), "--output", str(paths["decisions"]),
                    "--resume", "--model", a.model, "--temperature", str(a.temperature)]
@@ -118,9 +174,9 @@ def main() -> int:
             print(f"  block {b:>3}/{n_blocks}: attempt {attempts}, exit {rc}, {len(st['valid'])}/{st['n']} valid "
                   f"({time.time() - t0:,.0f}s)")
         if st["complete"]:
-            paths["window"].write_text(json.dumps({"block": b, "started_at": started,
+            paths["window"].write_text(json.dumps({"block": b, "mode": a.mode, "started_at": started,
                                                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                                                   "attempts": attempts}, indent=2))
+                                                   "attempts": attempts, "batches": batches}, indent=2))
         else:
             failed.append(b)
             print(f"  ❌ block {b} is still incomplete after {attempts} attempt(s): {len(st['missing'])} missing, "
