@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Tuple
 
 TOP_LEVEL = ("hypothesis", "question_a_field_importance", "question_a_manifest", "question_a_1b_list",
              "question_b_category_ranking", "question_c_field_attribution", "question_d_identity_null_check",
-             "stated_vs_revealed_importance", "h1_distributed")
+             "stated_vs_revealed_importance", "h1_distributed",
+             "primary_stratum", "strata_definitions", "stratum_sizes", "decision_rule", "by_stratum")
 LEGACY_SIZES = (5, 6)          # the amendment: 5 top fields vs 6 comparison fields
 MANIFEST_STATUSES = ("used", "no_manifest")
 SECTION_1B_STATUSES = ("ok", "not_triggered", "incomplete", "skipped: no manifest")
@@ -81,8 +82,25 @@ def _check_question_a(qa: Dict[str, Any], label: str, n_top: int, n_comp: int, r
                 if _nonneg_int(pr.get("n_discordant")) and _nonneg_int(pr.get("n_perturbed_in_both")):
                     _check(f"{p}: n_discordant <= n_perturbed_in_both", pr["n_discordant"] <= pr["n_perturbed_in_both"], issues)
                 _check(f"{p}: effective rates in [0,1]", _rate(pr.get("top5_effective_drift_rate")) and _rate(pr.get("comparison_effective_drift_rate")), issues)
+                _check(f"{p}: p_holm in [0,1] and never below p_value",
+                       _rate(pr.get("p_holm")) and _rate(pr.get("p_value")) and pr["p_holm"] >= pr["p_value"] * (1 - 1e-9), issues)
     else:
         _check(f"{label}: sensitivity analysis carries no pair list", "all_pairs" not in pw, issues)
+
+
+def _check_rule(r: Dict[str, Any], label: str, n_top: int, issues: List[str]) -> None:
+    _check(f"{label}: M in (0,1)", isinstance(r.get("M"), (int, float)) and 0 < r["M"] < 1, issues)
+    pt = r.get("per_top_field", {})
+    _check(f"{label}: one entry per top field", isinstance(pt, dict) and len(pt) == n_top, issues)
+    _check(f"{label}: per-field beats are non-negative ints and qualifies is bool",
+           all(_nonneg_int(v.get("n_beaten")) and isinstance(v.get("qualifies"), bool) and len(v.get("beaten", [])) == v.get("n_beaten") for v in pt.values()), issues)
+    _check(f"{label}: n_top_fields_qualifying matches the per-field flags",
+           r.get("n_top_fields_qualifying") == sum(bool(v.get("qualifies")) for v in pt.values()), issues)
+    mg = r.get("median_gap")
+    _check(f"{label}: median_gap in [-1,1] or null", mg is None or (isinstance(mg, (int, float)) and -1 <= mg <= 1), issues)
+    _check(f"{label}: fires and median_gap_at_least_M are bool", isinstance(r.get("fires"), bool) and isinstance(r.get("median_gap_at_least_M"), bool), issues)
+    _check(f"{label}: fires only if enough fields qualify and the gap reaches M",
+           not r.get("fires") or (r.get("median_gap_at_least_M") is True and r.get("n_top_fields_qualifying", 0) >= n_top - 1), issues)
 
 
 def validate_h1_results_schema(results: Dict[str, Any]) -> Tuple[bool, List[str]]:
@@ -92,6 +110,29 @@ def validate_h1_results_schema(results: Dict[str, Any]) -> Tuple[bool, List[str]
     if issues:
         return False, issues
     _check("hypothesis == H1", results["hypothesis"] == "H1", issues)
+    _check("primary_stratum == stable", results["primary_stratum"] == "stable", issues)
+    sz = results["stratum_sizes"]
+    _check("stratum_sizes: stable, boundary, all; stable + boundary <= all",
+           isinstance(sz, dict) and set(sz) == {"stable", "boundary", "all"} and all(_nonneg_int(v) for v in sz.values())
+           and sz["stable"] + sz["boundary"] <= sz["all"], issues)
+    dr = results["decision_rule"]
+    _check("decision_rule: stable stratum, a known list", dr.get("stratum") == "stable" and dr.get("list") in ("1b", "legacy_1a"), issues)
+    _check_rule(dr, "decision_rule", len(results.get("question_a_1b_list", {}).get("top_group", [])) if dr.get("list") == "1b" else LEGACY_SIZES[0], issues)
+    bs = results["by_stratum"]
+    _check("by_stratum: boundary and all", isinstance(bs, dict) and set(bs) == {"boundary", "all"}, issues)
+    for name, blk in (bs.items() if isinstance(bs, dict) else []):
+        if not blk.get("n_customers"):
+            _check(f"by_stratum.{name}: empty stratum says so", blk.get("n_customers") == 0 and "note" in blk, issues)
+            continue
+        _check(f"by_stratum.{name}: n_customers equals stratum_sizes", blk.get("n_customers") == sz.get(name), issues)
+        for key in ("question_a_field_importance", "decision_rule_legacy_list", "question_b_category_ranking",
+                    "question_c_field_attribution", "question_d_identity_null_check", "stated_vs_revealed_importance", "h1_distributed"):
+            _check(f"by_stratum.{name}.{key}: present", key in blk, issues)
+        if "question_a_field_importance" in blk:
+            _check_question_a(blk["question_a_field_importance"], f"by_stratum.{name}.question_a", *LEGACY_SIZES, True, issues)
+        if "decision_rule_legacy_list" in blk:
+            _check_rule(blk["decision_rule_legacy_list"], f"by_stratum.{name}.decision_rule_legacy_list", LEGACY_SIZES[0], issues)
+    _check("no internal rule scaffolding leaks into the output", "_pairs_for_rule" not in json.dumps(results), issues)
 
     _check_question_a(results["question_a_field_importance"], "question_a (legacy list)", *LEGACY_SIZES, True, issues)
 

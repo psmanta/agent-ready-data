@@ -1570,11 +1570,15 @@ This amendment is pre-registered only through its commit. Before the 5,000-call 
 - `evaluate_h2.py`
 - `evaluate_h3.py`
 - `evaluate_h4.py`
+- `customer_halves.py`
+- `validate_h2_schema.py`
+- `test_evaluate_h2.py`
 - `validate_h1_schema.py`
 - `validate_h3_schema.py`
 - `validate_h4_schema.py`
 - `test_h1_replication.py`
 - `test_evaluate_h1_manifest.py`
+- `test_evaluate_h1_strata.py`
 - `check_amendment_consistency.py`
 - `freeze_manifest.py`
 - `test_freeze_manifest.py`

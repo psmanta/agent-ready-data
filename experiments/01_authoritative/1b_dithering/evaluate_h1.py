@@ -18,6 +18,22 @@ Answers H1's four sub-questions from 1b_DESIGN_AMENDMENT_1.md:
 Plus two free analyses: category impact ranking, and stated-vs-revealed
 field importance.
 
+STRATIFICATION (Revision 3, R3-9 / D54). Every analysis is computed for the
+stable stratum (PRIMARY: customers whose five clean baseline runs agreed) and
+reported again for boundary (lightly + deeply + tied) and all (every customer).
+The top-level keys hold the STABLE results; the same blocks for boundary and
+all sit under "by_stratum". Question A's 30 McNemar tests and the Mann-Whitney
+are therefore stable-primary.
+
+DECISION RULE (Revision 3, R3-12 / D58; family F1). On the stable stratum and
+the primary list (the 1b list if the replication trigger fired, else the
+legacy list): a top field QUALIFIES if it beats at least (n_comparison - 1) of
+the comparison fields (5 of 6), both by point estimate and by a paired exact
+McNemar test passing Holm across all n_top x n_comparison pairs (30); the rule
+FIRES if at least (n_top - 1) top fields qualify (4 of 5) AND the median
+top-minus-comparison gap over all pairs is at least M (10 points). Gaps are
+exposure-adjusted drift differences, so the control's drift cancels.
+
 CROSS-HYPOTHESIS DATA REUSE: Question A's comparison group draws 4 of
 its 6 fields from H2 and H3's condition folders (total_spend,
 tenure_months, avg_resolution_time_hours, refund_rate) rather than
@@ -34,8 +50,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaluate_core import (
     load_condition, compute_drift_rate, compute_effective_drift_rate,
     attribute_by_field, mcnemar_paired_test, mann_whitney_test,
-    align_drift_by_customer,
+    align_drift_by_customer, stability_stratum,
 )
+
+STRATA = ("stable", "boundary", "all")
+PRIMARY_STRATUM = "stable"
+MATERIALITY_M = 0.10            # D57
+ALPHA = 0.05
+
+
+def in_stratum(record: Dict[str, Any], stratum: str) -> bool:
+    return True if stratum == "all" else stability_stratum(record) == stratum
+
+
+def restrict(loaded: Dict[str, List[Dict[str, Any]]], stratum: str) -> Dict[str, List[Dict[str, Any]]]:
+    return {cid: [r for r in recs if in_stratum(r, stratum)] for cid, recs in loaded.items()}
+
+
+def holm(pvals: List[Optional[float]]) -> List[Optional[float]]:
+    """Holm step-down; None stays None and does not count toward the family size."""
+    idx = [i for i, p in enumerate(pvals) if p is not None]
+    m, out, running = len(idx), [None] * len(pvals), 0.0
+    for rank, i in enumerate(sorted(idx, key=lambda i: pvals[i])):
+        running = max(running, min(1.0, (m - rank) * pvals[i]))
+        out[i] = running
+    return out
 
 
 # ============================================================================
@@ -205,6 +244,8 @@ def _question_a(
                 **mcnemar_result,
             })
 
+    for pr, ph in zip(pairwise_results, holm([pr["p_value"] for pr in pairwise_results])):
+        pr["p_holm"] = ph                                    # Holm across all n_top x n_comparison pairs (family F1)
     n_pairs = len(pairwise_results)
     n_significant = sum(1 for r in pairwise_results if r["p_value"] < 0.05)
 
@@ -222,6 +263,7 @@ def _question_a(
     }
     if include_pairs:
         pairwise_block["all_pairs"] = pairwise_results
+    pairwise_block["_pairs_for_rule"] = pairwise_results     # removed before output; used by decision_rule()
 
     return {
         "adjustment_note": (
@@ -486,6 +528,76 @@ def h1_distributed_report(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, 
 
 
 # ============================================================================
+# DECISION RULE (D58) — applied to a Question A analysis block
+# ============================================================================
+
+def decision_rule(qa: Dict[str, Any], top: Dict[str, str], comparison: Dict[str, str], M: float = MATERIALITY_M) -> Dict[str, Any]:
+    pairs = qa["pairwise_mcnemar_primary"]["_pairs_for_rule"]
+    n_top, n_comp = len(top), len(comparison)
+    need_beats, need_fields = n_comp - 1, n_top - 1
+    per_top = {}
+    for tf in top.values():
+        mine = [p for p in pairs if p["top5_field"] == tf]
+        beats = [p["comparison_field"] for p in mine
+                 if p["top5_effective_drift_rate"] > p["comparison_effective_drift_rate"]
+                 and p["p_holm"] is not None and p["p_holm"] < ALPHA]
+        per_top[tf] = {"n_beaten": len(beats), "beaten": beats, "qualifies": len(beats) >= need_beats}
+    gaps = sorted(p["top5_effective_drift_rate"] - p["comparison_effective_drift_rate"] for p in pairs)
+    median_gap = None
+    if gaps:
+        k = len(gaps)
+        median_gap = gaps[k // 2] if k % 2 else (gaps[k // 2 - 1] + gaps[k // 2]) / 2
+    n_qual = sum(v["qualifies"] for v in per_top.values())
+    return {
+        "M": M,
+        "rule": f"at least {need_fields} of {n_top} top fields each beat at least {need_beats} of {n_comp} comparison fields "
+                f"(point estimate higher AND paired exact McNemar p_holm < {ALPHA}, Holm across all {n_top * n_comp} pairs), "
+                f"AND the median top-minus-comparison gap is at least M",
+        "per_top_field": per_top,
+        "n_top_fields_qualifying": n_qual,
+        "median_gap": None if median_gap is None else round(median_gap, 4),
+        "median_gap_at_least_M": bool(median_gap is not None and median_gap >= M),
+        "fires": bool(n_qual >= need_fields and median_gap is not None and median_gap >= M),
+    }
+
+
+def _strip_rule_pairs(block: Any) -> Any:
+    if isinstance(block, dict):
+        block.pop("_pairs_for_rule", None)
+        for v in block.values():
+            _strip_rule_pairs(v)
+    elif isinstance(block, list):
+        for v in block:
+            _strip_rule_pairs(v)
+    return block
+
+
+def stratum_analyses(loaded_s: Dict[str, List[Dict[str, Any]]], manifest: Optional[Dict[str, Any]],
+                     section_1b_status: str, baseline_reference_path: Path) -> Dict[str, Any]:
+    """Every H1 analysis on one stratum's records."""
+    n = len({r["customer_id"] for r in loaded_s.get("h1_individual_churn_risk_score", [])})
+    if n == 0:
+        return {"n_customers": 0, "note": "no customers in this stratum"}
+    legacy_top = TOP5_FIELDS
+    legacy_comp = {cid: f for cid, (f, _) in COMPARISON_FIELDS.items()}
+    qa = _question_a(loaded_s, legacy_top, legacy_comp)
+    out: Dict[str, Any] = {"n_customers": n, "question_a_field_importance": qa,
+                           "decision_rule_legacy_list": decision_rule(qa, legacy_top, legacy_comp)}
+    if section_1b_status == "ok":
+        q1b = question_a_1b_analysis(loaded_s, manifest)
+        p = manifest["question_a_groups"]["primary_1b"]
+        out["question_a_1b_list"] = q1b
+        out["decision_rule_1b_list"] = decision_rule(q1b["analysis"], {e["condition_id"]: e["field"] for e in p["top"]},
+                                                     {e["condition_id"]: e["field"] for e in p["comparison"]})
+    out["question_b_category_ranking"] = question_b_category_ranking(loaded_s)
+    out["question_c_field_attribution"] = question_c_attribution(loaded_s)
+    out["question_d_identity_null_check"] = question_d_null_check(loaded_s)
+    out["stated_vs_revealed_importance"] = stated_vs_revealed_importance(baseline_reference_path, loaded_s, manifest)
+    out["h1_distributed"] = h1_distributed_report(loaded_s)
+    return _strip_rule_pairs(out)
+
+
+# ============================================================================
 # ORCHESTRATOR
 # ============================================================================
 
@@ -535,45 +647,51 @@ def evaluate_h1(
     loaded = load_all_h1_conditions(experiments_output_dir, ground_truth,
                                     extra_condition_ids=[c for c in extra_ids if c not in missing])
 
-    print("\nRunning Question A (field importance: top-5 vs. comparison)...")
-    question_a = question_a_analysis(loaded)
-
     if manifest is None:
-        question_a_1b: Dict[str, Any] = {"status": "skipped: no manifest"}
+        status_1b = "skipped: no manifest"
+        question_a_1b: Dict[str, Any] = {"status": status_1b}
     elif not manifest["decision"]["triggered"]:
-        question_a_1b = {"status": "not_triggered",
+        status_1b = "not_triggered"
+        question_a_1b = {"status": status_1b,
                          "note": "Top-5 overlap was above the pre-registered trigger; Question A stands on the legacy list."}
     elif missing:
-        question_a_1b = {"status": "incomplete", "missing_conditions": missing}
+        status_1b = "incomplete"
+        question_a_1b = {"status": status_1b, "missing_conditions": missing}
     else:
-        print("Running Question A on the 1b list (primary: the replication trigger fired)...")
-        question_a_1b = question_a_1b_analysis(loaded, manifest)
+        status_1b = "ok"
 
-    print("Running Question B (category impact ranking)...")
-    question_b = question_b_category_ranking(loaded)
+    by_stratum = {}
+    for s in STRATA:
+        print(f"Running every H1 analysis on the {s} stratum...")
+        by_stratum[s] = stratum_analyses(restrict(loaded, s), manifest, status_1b, baseline_reference_path)
+    primary = by_stratum[PRIMARY_STRATUM]
+    if not primary.get("n_customers"):
+        raise SystemExit("No stable customers: H1's primary analysis needs the stable stratum (check the finalized ground truth's stability tiers).")
+    if status_1b == "ok":
+        question_a_1b = primary["question_a_1b_list"]
+    primary_list = "1b" if status_1b == "ok" else "legacy_1a"
+    rule = primary["decision_rule_1b_list"] if status_1b == "ok" else primary["decision_rule_legacy_list"]
 
-    print("Running Question C (per-field attribution within categories)...")
-    question_c = question_c_attribution(loaded)
-
-    print("Running Question D (identity null-hypothesis check)...")
-    question_d = question_d_null_check(loaded)
-
-    print("Running stated-vs-revealed importance...")
-    stated_revealed = stated_vs_revealed_importance(baseline_reference_path, loaded, manifest)
-
-    print("Compiling h1_distributed report...")
-    distributed = h1_distributed_report(loaded)
-
+    sizes = {s: len({r["customer_id"] for r in loaded["h1_individual_churn_risk_score"] if in_stratum(r, s)}) for s in STRATA}
     return {
         "hypothesis": "H1",
-        "question_a_field_importance": question_a,
+        "primary_stratum": PRIMARY_STRATUM,
+        "strata_definitions": {
+            "stable": "stability_tier == stable (all five clean baseline runs agreed); PRIMARY",
+            "boundary": "lightly_boundary, deeply_boundary, tied_no_majority (reported, never dropped)",
+            "all": "every customer, including any without a tier (the unstratified number)",
+        },
+        "stratum_sizes": sizes,
+        "question_a_field_importance": primary["question_a_field_importance"],
         "question_a_manifest": qa_manifest,
         "question_a_1b_list": question_a_1b,
-        "question_b_category_ranking": question_b,
-        "question_c_field_attribution": question_c,
-        "question_d_identity_null_check": question_d,
-        "stated_vs_revealed_importance": stated_revealed,
-        "h1_distributed": distributed,
+        "decision_rule": {"stratum": PRIMARY_STRATUM, "list": primary_list, **rule},
+        "question_b_category_ranking": primary["question_b_category_ranking"],
+        "question_c_field_attribution": primary["question_c_field_attribution"],
+        "question_d_identity_null_check": primary["question_d_identity_null_check"],
+        "stated_vs_revealed_importance": primary["stated_vs_revealed_importance"],
+        "h1_distributed": primary["h1_distributed"],
+        "by_stratum": {s: by_stratum[s] for s in STRATA if s != PRIMARY_STRATUM},
     }
 
 
