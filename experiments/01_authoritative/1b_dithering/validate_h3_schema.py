@@ -30,8 +30,58 @@ def _valid_rate(x: Any) -> bool:
     return isinstance(x, (int, float)) and 0.0 <= x <= 1.0
 
 
+def _holm_ok(d: Dict[str, Any]) -> bool:
+    p, h = d.get("p_value"), d.get("p_holm")
+    if p is None:
+        return h is None
+    return _valid_rate(h) and h >= p * (1 - 1e-9)
+
+
 def validate_h3_results_schema(results: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """The stratified layout (stable at the top level, boundary and all under by_stratum) and the decision rule."""
     issues: List[str] = []
+    _check("stratified top-level keys present",
+           {"hypothesis", "primary_stratum", "strata_definitions", "stratum_sizes", "decision_rule", "by_stratum"} <= set(results), issues)
+    _check("hypothesis is H3 and the primary stratum is stable",
+           results.get("hypothesis") == "H3" and results.get("primary_stratum") == "stable", issues)
+    sz = results.get("stratum_sizes", {})
+    _check("stratum_sizes: stable, boundary, all; stable + boundary <= all",
+           set(sz) == {"stable", "boundary", "all"} and all(isinstance(v, int) and v >= 0 for v in sz.values())
+           and sz.get("stable", 0) + sz.get("boundary", 0) <= sz.get("all", 0), issues)
+    _block(results, "", issues)
+    _rule(results.get("decision_rule", {}), "decision_rule", issues)
+    _check("decision_rule.stratum == stable", results.get("decision_rule", {}).get("stratum") == "stable", issues)
+    bs = results.get("by_stratum", {})
+    _check("by_stratum: boundary and all", set(bs) == {"boundary", "all"}, issues)
+    for name, blk in bs.items():
+        if not blk.get("n_customers"):
+            _check(f"by_stratum.{name}: an empty stratum says so", blk.get("n_customers") == 0 and "note" in blk, issues)
+            continue
+        _check(f"by_stratum.{name}.n_customers equals stratum_sizes", blk.get("n_customers") == sz.get(name), issues)
+        _block(blk, f"by_stratum.{name}.", issues)
+        _rule(blk.get("decision_rule", {}), f"by_stratum.{name}.decision_rule", issues)
+    return (len(issues) == 0, issues)
+
+
+def _rule(r: Dict[str, Any], label: str, issues: List[str]) -> None:
+    _check(f"{label}: M in (0,1)", isinstance(r.get("M"), (int, float)) and 0 < r["M"] < 1, issues)
+    _check(f"{label}: direction in {{-1, 0, 1}}", r.get("direction") in (-1, 0, 1), issues)
+    n = r.get("n_significant_same_direction")
+    _check(f"{label}: n_significant_same_direction int in [0,4]", isinstance(n, int) and 0 <= n <= 4, issues)
+    _check(f"{label}: fires is bool, and only with all four significant in one direction and a material median",
+           isinstance(r.get("fires"), bool) and (not r.get("fires") or (n == 4 and r.get("median_at_least_M") is True and r.get("direction") in (-1, 1))), issues)
+    _check(f"{label}: wording consistent with the verdict",
+           (r.get("wording") == "consistent") == bool(r.get("fires")) and
+           (not str(r.get("wording", "")).startswith("three of four") or n == 3), issues)
+
+
+def _block(results: Dict[str, Any], prefix: str, issues: List[str]) -> None:
+    inner: List[str] = []
+    _block_checks(results, inner)
+    issues.extend(prefix + i for i in inner)
+
+
+def _block_checks(results: Dict[str, Any], issues: List[str]) -> None:
     SETS = ["pair1_churn_nps", "pair2_spend_ltv", "pair3_support_payment",
             "triplet", "reference_pair", "reference_triplet"]
     REAL_SETS = SETS[:4]
@@ -78,6 +128,9 @@ def validate_h3_results_schema(results: Dict[str, Any]) -> Tuple[bool, List[str]
                    sub.get("median_diff") is None or
                    (isinstance(sub.get("median_diff"), (int, float)) and -1.0 <= sub["median_diff"] <= 1.0),
                    issues)
+        if name in REAL_SETS and d.get("primary_unconditional") is not None:
+            _check(f"confidence_analysis.{name}.primary_unconditional.p_holm: present, never below p_value (family F3)",
+                   _holm_ok(d["primary_unconditional"]), issues)
         n_always = d.get("secondary_always_drifters", {}).get("n_always_drifted")
         _check(f"confidence_analysis.{name}.secondary.n_always_drifted: non-negative int",
                isinstance(n_always, int) and n_always >= 0, issues)
@@ -111,6 +164,7 @@ def validate_h3_results_schema(results: Dict[str, Any]) -> Tuple[bool, List[str]
                issues)
         _check(f"difference_in_differences.{name}.p_value: valid prob or None",
                _valid_prob_or_none(d.get("p_value")), issues)
+        _check(f"difference_in_differences.{name}.p_holm: present, and never below p_value (family F2)", _holm_ok(d), issues)
         ci = d.get("odds_ratio_95ci")
         _check(f"difference_in_differences.{name}.odds_ratio_95ci: 2-element, low<=high",
                isinstance(ci, list) and len(ci) == 2 and ci[0] <= ci[1] if ci else True, issues)

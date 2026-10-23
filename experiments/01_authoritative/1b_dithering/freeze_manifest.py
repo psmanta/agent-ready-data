@@ -54,7 +54,7 @@ ARTIFACTS: Dict[str, List[str]] = {
         # evaluators that exist, and their validators
         "evaluate_h1.py", "evaluate_h2.py", "evaluate_h3.py", "evaluate_h4.py",
         "customer_halves.py", "validate_h2_schema.py", "test_evaluate_h2.py",
-        "validate_h1_schema.py", "validate_h3_schema.py", "validate_h4_schema.py",
+        "validate_h1_schema.py", "validate_h3_schema.py", "validate_h4_schema.py", "test_evaluate_h3.py",
         # regression tests for the frozen tooling
         "test_h1_replication.py", "test_evaluate_h1_manifest.py", "test_evaluate_h1_strata.py", "check_amendment_consistency.py", "freeze_manifest.py", "test_freeze_manifest.py", "test_business_decision_agent.py",
         # the pre-registration itself

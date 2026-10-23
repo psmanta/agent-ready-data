@@ -1576,6 +1576,7 @@ This amendment is pre-registered only through its commit. Before the 5,000-call 
 - `validate_h1_schema.py`
 - `validate_h3_schema.py`
 - `validate_h4_schema.py`
+- `test_evaluate_h3.py`
 - `test_h1_replication.py`
 - `test_evaluate_h1_manifest.py`
 - `test_evaluate_h1_strata.py`

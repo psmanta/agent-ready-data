@@ -29,6 +29,22 @@ Five analyses, per 1b_DESIGN_AMENDMENT_1.md:
    uncorrelated arm (where fields can move independently; the correlated
    arm's coupling means this breakdown is expected to be dominated by
    "all fields together," reported for contrast, not as the main signal).
+
+STRATIFICATION (Revision 3, R3-9 / D54). Every analysis runs on the stable
+stratum (PRIMARY) and again on boundary (lightly + deeply + tied) and all.
+Top-level keys hold the stable results; boundary and all sit under
+"by_stratum". The GEE difference-in-differences is therefore stable-primary.
+
+MULTIPLICITY (R3-2 / D60). Holm within family F2 (the four DiD interaction
+tests) and within family F3 (the four primary confidence tests, one per real
+set), never across families. Each test carries its p_holm.
+
+DECISION RULE (R3-12 / D58). Fires if all four DiD contrasts are significant
+after Holm (F2), all in the same direction (either direction: the direction
+found is reported, because both are findings), and the median raw
+difference-in-differences is at least M (10 points) in that direction. When
+exactly three of four are significant in the same direction the result says
+"three of four" (Tier 2 wording), never "consistent".
 """
 
 import json
@@ -41,8 +57,27 @@ from evaluate_core import (
     load_condition, compute_drift_rate, compute_effective_drift_rate,
     attribute_by_field, mcnemar_paired_test, wilcoxon_signed_rank_test,
     jaccard_condition_level_shift, mean_pairwise_jaccard, binary_did_gee,
-    align_drift_by_customer, align_values_by_customer,
+    align_drift_by_customer, align_values_by_customer, stability_stratum,
 )
+
+STRATA = ("stable", "boundary", "all")
+PRIMARY_STRATUM = "stable"
+MATERIALITY_M = 0.10            # D57
+ALPHA = 0.05
+
+
+def in_stratum(record: Dict[str, Any], stratum: str) -> bool:
+    return True if stratum == "all" else stability_stratum(record) == stratum
+
+
+def holm(pvals: List[Optional[float]]) -> List[Optional[float]]:
+    """Holm step-down; None stays None and does not count toward the family size."""
+    idx = [i for i, p in enumerate(pvals) if p is not None]
+    m, out, running = len(idx), [None] * len(pvals), 0.0
+    for rank, i in enumerate(sorted(idx, key=lambda i: pvals[i])):
+        running = max(running, min(1.0, (m - rank) * pvals[i]))
+        out[i] = running
+    return out
 
 # Where each H3 field's OWN individual condition lives, at matched 15%
 # magnitude -- most already exist in H1/H2, only payment_failures is new
@@ -161,6 +196,8 @@ def confidence_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, An
         )
 
         results[name] = {"primary_unconditional": primary, "secondary_always_drifters": secondary}
+    for name, ph in zip(REAL_SETS, holm([results[n]["primary_unconditional"].get("p_value") for n in REAL_SETS])):
+        results[name]["primary_unconditional"]["p_holm"] = ph   # family F3: the four real sets' primary confidence tests
     return results
 
 
@@ -254,13 +291,20 @@ def did_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
             for r in loaded[f"h3_{ref_name}_{arm}"]:
                 rows.append({"customer_id": r["customer_id"], "pair_type": ref_name,
                             "is_uncorrelated": is_unc, "drift": int(r["drifted"])})
-        result = binary_did_gee(rows, treatment_group=name, reference_group=ref_name)
-        if result.get("raw_did", 0) > 0:
+        try:
+            result = binary_did_gee(rows, treatment_group=name, reference_group=ref_name)
+        except Exception as e:                   # e.g. a degenerate or tiny stratum; reported, never silently dropped
+            result = {"treatment_group": name, "reference_group": ref_name, "odds_ratio": None, "p_value": None,
+                      "note": f"GEE could not be fitted: {type(e).__name__}: {e}"}
+        if (result.get("raw_did") or 0) > 0:
             larger_than_reference_count += 1
         results[name] = result
 
+    for name, ph in zip(REAL_SETS, holm([results[n].get("p_value") for n in REAL_SETS])):
+        results[name]["p_holm"] = ph                 # family F2: Holm across the four interaction tests
     return {
         "comparisons": results,
+        "multiplicity": "Holm within family F2 (the four DiD interaction tests)",
         "n_sets_tested": len(REAL_SETS),
         "n_larger_than_reference": larger_than_reference_count,
         "consistency_note": (
@@ -320,6 +364,64 @@ def directionality_analysis(loaded: Dict[str, List[Dict[str, Any]]]) -> Dict[str
 
 
 # ============================================================================
+# DECISION RULE (D58)
+# ============================================================================
+
+def decision_rule(did: Dict[str, Any], M: float = MATERIALITY_M) -> Dict[str, Any]:
+    comps = did["comparisons"]
+    sig = {n: (comps[n].get("p_holm") is not None and comps[n]["p_holm"] < ALPHA) for n in REAL_SETS}
+    signs = {n: (0 if comps[n].get("raw_did") in (None, 0) else (1 if comps[n]["raw_did"] > 0 else -1)) for n in REAL_SETS}
+    dids = sorted(comps[n]["raw_did"] for n in REAL_SETS if comps[n].get("raw_did") is not None)
+    median = None
+    if len(dids) == len(REAL_SETS):
+        k = len(dids)
+        median = dids[k // 2] if k % 2 else (dids[k // 2 - 1] + dids[k // 2]) / 2
+    best_dir, best_n = 0, 0
+    for d in (1, -1):
+        n_d = sum(sig[n] and signs[n] == d for n in REAL_SETS)
+        if n_d > best_n:
+            best_dir, best_n = d, n_d
+    all_sig_same = best_n == len(REAL_SETS)
+    material = median is not None and best_dir != 0 and best_dir * median >= M
+    fires = bool(all_sig_same and material)
+    direction = {1: "contradictions cost MORE than consistent errors (decorrelating a real set costs more than its reference)",
+                 -1: "contradictions cost LESS than consistent errors (decorrelating a real set costs less than its reference)",
+                 0: "no significant direction"}[best_dir]
+    return {
+        "M": M,
+        "rule": f"all {len(REAL_SETS)} DiD contrasts significant after Holm (F2, alpha {ALPHA}), same direction, "
+                f"and the median raw DiD at least M in that direction",
+        "significant_after_holm": sig,
+        "n_significant_same_direction": best_n,
+        "direction": best_dir,
+        "direction_wording": direction,
+        "median_raw_did": None if median is None else round(median, 4),
+        "median_at_least_M": bool(material),
+        "fires": fires,
+        "wording": ("consistent" if fires else
+                    "three of four (Tier 2 wording; never 'consistent')" if best_n == len(REAL_SETS) - 1 else
+                    "no consistent effect"),
+    }
+
+
+def stratum_analyses(loaded_s: Dict[str, List[Dict[str, Any]]], baseline_reference_path: Path,
+                     ground_truth: Dict[str, Any]) -> Dict[str, Any]:
+    n = len({r["customer_id"] for r in loaded_s.get("h3_pair1_churn_nps_correlated", [])})
+    if n == 0:
+        return {"n_customers": 0, "note": "no customers in this stratum"}
+    did = did_analysis(loaded_s)
+    return {
+        "n_customers": n,
+        "core_drift_comparison": core_drift_comparison(loaded_s),
+        "confidence_analysis": confidence_analysis(loaded_s),
+        "jaccard_coherence": jaccard_coherence_analysis(loaded_s, baseline_reference_path, ground_truth),
+        "difference_in_differences": did,
+        "decision_rule": decision_rule(did),
+        "directionality": directionality_analysis(loaded_s),
+    }
+
+
+# ============================================================================
 # ORCHESTRATOR
 # ============================================================================
 
@@ -334,28 +436,31 @@ def evaluate_h3(
     print("Loading all 15 H3 conditions...")
     loaded = load_all_h3_conditions(experiments_output_dir, ground_truth)
 
-    print("\n1. Core drift comparison (McNemar's, correlated vs. uncorrelated)...")
-    drift = core_drift_comparison(loaded)
-
-    print("2. Confidence analysis (primary unconditional + secondary always-drifters)...")
-    confidence = confidence_analysis(loaded)
-
-    print("3. Jaccard reasoning coherence...")
-    jaccard = jaccard_coherence_analysis(loaded, baseline_reference_path, ground_truth)
-
-    print("4. Binary difference-in-differences via GEE...")
-    did = did_analysis(loaded)
-
-    print("5. Free 2x2 directionality...")
-    directionality = directionality_analysis(loaded)
-
+    by_stratum = {}
+    for s in STRATA:
+        print(f"Running every H3 analysis on the {s} stratum...")
+        by_stratum[s] = stratum_analyses({cid: [r for r in recs if in_stratum(r, s)] for cid, recs in loaded.items()},
+                                         baseline_reference_path, ground_truth)
+    primary = by_stratum[PRIMARY_STRATUM]
+    if not primary.get("n_customers"):
+        raise SystemExit("No stable customers: H3's primary analysis needs the stable stratum (check the finalized ground truth's stability tiers).")
+    sizes = {s: len({r["customer_id"] for r in loaded["h3_pair1_churn_nps_correlated"] if in_stratum(r, s)}) for s in STRATA}
     return {
         "hypothesis": "H3",
-        "core_drift_comparison": drift,
-        "confidence_analysis": confidence,
-        "jaccard_coherence": jaccard,
-        "difference_in_differences": did,
-        "directionality": directionality,
+        "primary_stratum": PRIMARY_STRATUM,
+        "strata_definitions": {
+            "stable": "stability_tier == stable (all five clean baseline runs agreed); PRIMARY",
+            "boundary": "lightly_boundary, deeply_boundary, tied_no_majority (reported, never dropped)",
+            "all": "every customer, including any without a tier (the unstratified number)",
+        },
+        "stratum_sizes": sizes,
+        "core_drift_comparison": primary["core_drift_comparison"],
+        "confidence_analysis": primary["confidence_analysis"],
+        "jaccard_coherence": primary["jaccard_coherence"],
+        "difference_in_differences": primary["difference_in_differences"],
+        "decision_rule": {"stratum": PRIMARY_STRATUM, **primary["decision_rule"]},
+        "directionality": primary["directionality"],
+        "by_stratum": {s: by_stratum[s] for s in STRATA if s != PRIMARY_STRATUM},
     }
 
 
