@@ -1554,6 +1554,8 @@ This amendment is pre-registered only through its commit. Before the 5,000-call 
 - `test_collection.py`
 - `batch_runner.py`
 - `test_batch_runner.py`
+- `check_pilot_disjoint.py`
+- `test_check_pilot_disjoint.py`
 - `aggregate_baseline.py`
 - `refine_boundary_convergence.py`
 - `run_boundary_expansion.py`

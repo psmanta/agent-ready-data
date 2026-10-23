@@ -32,8 +32,12 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
+import platform
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -509,6 +513,74 @@ def generate_clean_reruns(output_dir: Path, n_reruns: int) -> list:
     return made
 
 
+# ============================================================================
+# GENERATION MANIFEST
+# ============================================================================
+# The generator used to print its seed and write it nowhere, so the seed behind a directory of agent inputs could not
+# be read off the files (pilot_population_audit.txt had to recover it by regenerating). generation_manifest.json is an
+# append-only history: one entry per run of this script, with the seed, n, mode, command line, code versions and the
+# sha256 of every file the run produced. check_pilot_disjoint.py reads it before the confirmatory run.
+
+MANIFEST_NAME = "generation_manifest.json"
+MANIFEST_VERSION = 1
+
+
+def generated_files(output_dir: Path) -> List[Path]:
+    """The files this script writes (never agent output: no decisions, summaries or fingerprints)."""
+    out = []
+    for pattern in ("ground_truth/*.json", "baseline/agent_input/*.jsonl", "baseline/record_id_map.json",
+                    "validity_report.json", "conditions/*/agent_input.jsonl", "conditions/*/dither_reference.json",
+                    "conditions/*/control.json"):
+        out.extend(p for p in output_dir.glob(pattern) if p.is_file())
+    return sorted(set(out))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _git(*args) -> Any:
+    try:
+        r = subprocess.run(["git", *args], cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def write_generation_manifest(output_dir: Path, args, mode: str, started_at: str) -> Path:
+    here = Path(__file__).resolve().parent
+    shared = here.parent.parent.parent / "shared" / "data_generation"
+    code = {}
+    for f in (here / "generate_dithered_data.py", shared / "base_customer_generator.py", shared / "dither_engine.py",
+              shared / "validate_dama_dimensions.py"):
+        code[f.name] = _sha256(f) if f.exists() else None
+    commit = _git("rev-parse", "HEAD")
+    entry = {
+        "started_at": started_at,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "seed": args.seed,
+        "n": args.n,
+        "seed_was_explicit": any(a == "--seed" or a.startswith("--seed=") for a in sys.argv[1:]),
+        "mode": mode,
+        "condition": args.condition,
+        "clean_reruns": args.clean_reruns,
+        "argv": list(sys.argv),
+        "code_sha256": code,
+        "git_commit": commit,
+        "git_dirty": None if commit is None else bool(_git("status", "--porcelain", "--untracked-files=no")),
+        "python": platform.python_version(),
+        "files": {str(p.relative_to(output_dir)): _sha256(p) for p in generated_files(output_dir)},
+    }
+    path = output_dir / MANIFEST_NAME
+    manifest = json.load(open(path)) if path.exists() else {"manifest_version": MANIFEST_VERSION, "runs": []}
+    manifest["runs"].append(entry)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2))
+    tmp.replace(path)
+    print(f"  Wrote {path} (run {len(manifest['runs'])}: seed {args.seed}, n {args.n}, {len(entry['files'])} files hashed)")
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate ground truth, baseline, and dither condition data for 1b",
@@ -547,6 +619,10 @@ Examples:
                              "ones (default 1; 0 for none)")
     args = parser.parse_args()
     output_dir = Path(args.out)
+    started_at = datetime.now(timezone.utc).isoformat()
+    if not any(a == "--seed" or a.startswith("--seed=") for a in sys.argv[1:]):
+        print(f"  WARNING: no --seed given, so the default seed {DEFAULT_SEED} is used. That is the seed of a PILOT population; "
+              f"the confirmatory run passes --seed 20261016 explicitly (check_pilot_disjoint.py enforces it).")
 
     print(f"\n{'#'*60}")
     print(f"# Experiment 1b: Dithering — Data Generation")
@@ -566,6 +642,9 @@ Examples:
                                 allow_invalid=args.allow_invalid)
         if args.condition is None and args.clean_reruns > 0:
             generate_clean_reruns(output_dir, args.clean_reruns)
+
+    mode = "single_condition" if args.condition else ("baseline_only" if args.baseline_only else "full")
+    write_generation_manifest(output_dir, args, mode, started_at)
 
     print(f"\n{'#'*60}")
     print("# DONE")

@@ -44,6 +44,8 @@ ARTIFACTS: Dict[str, List[str]] = {
         "collection_common.py", "plan_collection.py", "run_collection.py", "collect_results.py", "test_collection.py",
         # batch mode (Message Batches API): one batch per block, and its regression test
         "batch_runner.py", "test_batch_runner.py",
+        # the confirmatory population: seed, provenance and disjointness from the pilots
+        "check_pilot_disjoint.py", "test_check_pilot_disjoint.py",
         # baseline aggregation and boundary expansion
         "aggregate_baseline.py", "refine_boundary_convergence.py", "run_boundary_expansion.py", "prepare_next_batch.py",
         # measurement instruments and pre-registered decision-rule tooling
