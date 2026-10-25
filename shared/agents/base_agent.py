@@ -245,10 +245,10 @@ class BaseExperimentAgent(ABC):
         model_key = self.model.lower()
         model_pricing = None
     
-        for key, prices in pricing.items():
-            if key in model_key:
-                model_pricing = prices
-                break
+        # longest matching key wins, so e.g. "gpt-4o-mini" is never priced as "gpt-4o"
+        matches = [k for k in pricing if k in model_key]
+        if matches:
+            model_pricing = pricing[max(matches, key=len)]
     
         if not model_pricing:
             print(f"⚠️  Warning: No pricing found for model '{self.model}', cost will be $0.00")

@@ -49,13 +49,30 @@
       "input": 0.01,
       "output": 0.03,
       "per_tokens": 1000
+    },
+    "gemini-3.8-flash": {
+      "input": 0.00075,
+      "output": 0.00375,
+      "per_tokens": 1000,
+      "note": "standard price until 31 Dec 2026; from 1 Jan 2027 input 0.0015, output 0.0075. Record the price in force on the run date."
     }
   },
-  "last_updated": "2026-03-12",
-  "source": "https://www.anthropic.com/pricing",
+  "last_updated": "2026-10-23",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing (Anthropic); https://ai.google.dev/gemini-api/docs/pricing (Google)",
   "notes": {
-    "per_tokens": "All prices use per_tokens: 1000 (i.e. price per 1K tokens). Official Anthropic pricing is per 1M tokens — divide by 1000 to get per-1K rate.",
-    "batch_api": "50% discount available on all models for async batch processing",
-    "prompt_caching": "Cache reads cost 10% of standard input price after first cache write"
-  }
+    "per_tokens": "All prices use per_tokens: 1000 (i.e. price per 1K tokens). Official Anthropic pricing is per 1M tokens \u2014 divide by 1000 to get per-1K rate.",
+    "batch_api": "batch_discount (0.5) is applied by experiments/01_authoritative/1b_dithering/batch_runner.py",
+    "prompt_caching": "Cache reads cost 10% of standard input price after first cache write",
+    "matching": "A model string is priced by the LONGEST key it contains (so gpt-4o-mini is never priced as gpt-4o)."
+  },
+  "verified": {
+    "claude-haiku-4-5": "2026-10-23: $1 / $5 per MTok standard, $0.50 / $2.50 batch (the 1b agent and H5 judge)",
+    "gemini-3.8-flash": "2026-10-22: $0.75 / $3.75 per MTok standard until 31 Dec 2026, doubling 1 Jan 2027; batch half (the second judge, D71)"
+  },
+  "batch_discount": 0.5,
+  "retired_models_kept_for_history": [
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-haiku-20240307"
+  ]
 }

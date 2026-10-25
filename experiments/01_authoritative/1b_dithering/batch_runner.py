@@ -40,7 +40,7 @@ sys.path.insert(0, str(HERE))
 import business_decision_agent as A  # noqa: E402  (loads .env, defines the prompt and the shared builders)
 
 CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-BATCH_PRICE_FACTOR = 0.5
+BATCH_PRICE_FACTOR = 0.5            # must equal model_pricing.json's batch_discount (checked at load)
 API_MODE = "batch"
 
 
@@ -80,8 +80,12 @@ def batch_cost(model: str, input_tokens: Optional[int], output_tokens: Optional[
     global _PRICING
     if _PRICING is None:
         path = HERE.parent.parent.parent / "shared" / "agents" / "model_pricing.json"
-        _PRICING = json.load(open(path)).get("pricing", {}) if path.exists() else {}
-    price = next((p for k, p in _PRICING.items() if k in model.lower()), None)
+        cfg = json.load(open(path)) if path.exists() else {}
+        if cfg.get("batch_discount", BATCH_PRICE_FACTOR) != BATCH_PRICE_FACTOR:
+            raise ValueError("model_pricing.json's batch_discount disagrees with batch_runner.BATCH_PRICE_FACTOR")
+        _PRICING = cfg.get("pricing", {})
+    keys = [k for k in _PRICING if k in model.lower()]
+    price = _PRICING[max(keys, key=len)] if keys else None          # longest matching key wins
     if price is None or input_tokens is None or output_tokens is None:
         return None
     per = price.get("per_tokens", 1000)
