@@ -52,6 +52,10 @@ fund quality where decisions depend on it, and keep the upstream gate for what t
 we corrupt data and do not clean it, so we cannot say cleaning is worthless in general.
 
 **Will not say:** that data hygiene is unnecessary; that cleaning a field is worthless; that any share of a record is "decoration" in general;
+
+**If the result goes the other way** *(pre-mortem G7; written before any result exists)*
+- *The contact details do move decisions.* **Plain:** Even the fields everyone assumes don't matter changed the agent's decisions: when we spoiled the contact details, [x]% of decisions changed. For this decision, there was no safe field to neglect. **Technical:** H1 identity condition, net drift [x]% (95% interval [a, b]), at or above M.
+- *No tested field moves decisions materially.* **Plain:** For this decision, the agent was robust to every error we tried: no field we spoiled moved more than [x] in 100 decisions. That supports the belief that agents filter small errors, for this agent, these fields and these error sizes. **Technical:** every field's net-drift interval has an upper bound below M (the absence rule, D57); "non-material for this decision", never "does not matter".
 anything about fields we did not test; whether agents should or should not be deployed.
 
 ### Claim 2: the open slot, filled by whichever result is strongest
@@ -68,6 +72,11 @@ together) with H4's believable arm: drift [x]% against [y]%; the confidence the 
 
 **Will not say:** that the agent "understands" anything; we see only what it does.
 
+**If the result goes the other way** *(pre-mortem G7)*
+- *Nothing qualifies.* **Plain:** No single way of reacting to bad data stood out; the agent's sensitivity depended on the field and the error, not on one pattern. **Technical:** no candidate passed its pre-registered test and replication in both customer halves, or the leader was below M (entry 17, "none").
+- *Several qualify, none dominates.* **Plain:** No single reaction mode dominated: [mechanisms] each moved decisions by similar amounts. **Technical:** co-leaders within 1.5 times of the leader and at least M (entry 17, "plural"). Never "equally".
+- *The magnitude curve is a slope, not a cliff (H2 smooth).* **Plain:** A slope, not a cliff: small errors move few decisions and bigger errors move more. *(Mixed.)* **Plain:** Moderate sensitivity: small errors already move some decisions for customers who were not close calls, and large errors move more. **Technical:** the H2 shape test (R3-3); scoped to this agent, this field and this size scale.
+
 ### Claim 3: unless you ask, the agent usually does not tell you
 
 **Plain.** Unless you ask it to, an AI agent that decides from the data it is handed probably won't tell you the data is wrong. When the data was wrong, the agent said so in [x]% of cases, against [y]% when the data was clean. [It rarely flags it; it often
@@ -78,6 +87,10 @@ separately and labelled soft (model confidence is weakly calibrated). Refusal wa
 confidence. Judge-based labels are provisional until a human audit.
 
 **Will not say:** that the agent *cannot* detect problems. The claim is about unprompted behavior when no flag option or instruction to check is offered; what happens if you ask is untested (backlog: Experiment 1c).
+
+**If the result goes the other way** *(pre-mortem G7)*
+- *The agent often does flag bad data.* **Plain:** Even without being asked, the agent often told us when the data was wrong: it flagged the problem in [x]% of cases with altered data, against [y]% with clean data. That is good news, and it means the in-agent check is worth building on; how reliably it does so depends on [field / error type]. **Technical:** H5 detection rates with intervals; the claim's title becomes "it often tells you, unprompted".
+- *The human audit cannot validate the judge.* **Plain:** The agent flagged the problem in at least [x]% of cases (a lower bound from a simple word scan; our human reviewers could not agree closely enough to measure how much the scan misses). **Technical:** the judge stays Tier 2; keyword detection rates are reported as lower bounds; the audit is reported as "people could not agree on the construct" (R3-6 consequence rule).
 
 ### Claim 4: rank by impact, then decide what to fix first
 
@@ -109,6 +122,10 @@ the no-dithering reference. Impact ranking only, for the fields tested; prevalen
 
 **Will not say:** how common these errors are in anyone's data or how costly they are to fix; rankings beyond the fields we tested; that a ranking by impact alone is a priority list; that removing a field from the agent's input is safe (untested; an ablation would test it); that a check prevents bad decisions; that a payload is "AI-ready"; why identical input sometimes gets a different decision (we do not know).
 
+**If the result goes the other way** *(pre-mortem G7)*
+- *No field clears the materiality line.* **Plain:** For this decision, no field we tested moved more than [x] in 100 decisions when it was wrong, so the impact term is small for every one of them, and the fix-first order is set by how often a field is wrong and what it costs to fix, not by our ranking. **Technical:** every field's net-drift upper bound is below M (D57); the ranking is reported as tied, not ordered.
+- *Fields cannot be told apart.* **Plain:** Several fields moved decisions by similar amounts; we report them as a tie rather than a ranking. **Technical:** rankings are shown as tiers, with conditions that cannot be told apart tied (evidence tiers, Tier 2).
+
 ### Also found: the window effect
 
 **Plain.** The same agent, with the same instructions and the same data, gave a different decision for [3 of 30] customers depending on when it
@@ -119,6 +136,16 @@ changed between sessions (exact 95% range 2.1% to 26.5%), deterministic within a
 answers), not the libraries, not the data change under test. Cause unknown (serving side). One model, one API.
 
 **Will not say:** why it happens; that it affects other models; anything stronger than "in this small check" until the control reports.
+
+**If the result goes the other way** *(pre-mortem G7, G2)*
+- *The window effect does not recur at scale.* **Plain:** The small check's result did not hold up: at 1,000 customers, identical input got a different decision only [x]% of the time. **Technical:** clean re-run control drift [x]% (95% interval [a, b]), stable stratum.
+- *It is too large to see past.* **Plain:** Identical input got a different decision [x]% of the time, about as often as the effects we set out to measure, so every other result here is inconclusive at this noise level. How often the same agent changes its mind on the same data is the main finding. **Technical:** control drift in the stable stratum above M (pre-mortem G2); results that would have been Tier 1 are reported as Tier 2.
+
+---
+
+### Any result: too little data to tell *(pre-mortem G3)*
+
+**Plain:** We can't tell from this data whether [x] matters: the result is inconclusive. **Technical:** the net-drift interval includes M and zero (D57); the test's detection rate at the realized stable-group size was [p]% (D59). Never "no effect".
 
 ---
 
@@ -134,6 +161,11 @@ answers), not the libraries, not the data change under test. Cause unknown (serv
 | Drift (a flip) | The agent's decision changed because the data changed. | Decision differs from the reference decision for a perturbed customer. |
 | Perturbed | The value really changed. A value that could not move (a zero drawn downward) is not counted. | A record whose `_dither_fields` is non-empty; blocked records are excluded from every table. |
 | Boundary customer | A customer the agent can't make up its mind about: the same clean record gets different decisions. | Baseline runs split across decisions (4-1 lightly, 3-2 deeply, or a tie). |
+| Stable customer | A customer the agent decides the same way every time on the clean record. The main group for every test. | All five baseline runs agree (5-0), across five different windows. |
+| Materiality line (M) | The smallest change in decisions we treat as big enough to headline: 10 in every 100 stable customers' decisions. | M = 10 percentage points of net drift (drift minus the clean re-run control's drift) in the stable stratum (D57). "No material effect" needs the whole interval below M. |
+| Clean re-run control | An extra run of every customer with nothing changed: it shows how often decisions change just because of when the call ran. | `h0_clean_rerun_1`, run in the same randomized blocks; every drift is reported net of it. |
+| Finding / evidence tiers | Only pre-registered, corrected tests may be called findings (Tier 1). Everything else is a description (Tier 2) or a lead for the next experiment (Tier 3). | Tier 1 confirmatory, Tier 2 descriptive (intervals, no discovery language), Tier 3 exploratory (R3-1, D37). |
+| Inconclusive | The data can't tell whether the effect is there or not. Not the same as "no effect". | The net-drift interval includes both zero and M. |
 | Stable customer | One the agent decides the same way every time. | All baseline runs agree, across windows. |
 | Window | A stretch of time during which the agent behaves consistently. | A scheduling block; behavior can differ between blocks for identical input. |
 | Window effect | The same input, model and prompt giving a different decision at a different time. | Cross-window disagreement; measured by the clean re-run control. |

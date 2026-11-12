@@ -915,6 +915,19 @@ Haiku 4.5, with a design that works for any"; a funding and independence line to
 
 *(More questions to come from the owner.)*
 
+### RT8. Pre-mortem: "It is six weeks later and the result is unusable. Why?" (DONE for this pass, 2026-11-11)
+
+Recorded in full in `premortem_DRAFT.md`. Six failure stories already defended (sleep, SDK and temperature, edited files, wrong
+seed, model retirement, window effects). Seven gaps, all decided by the owner on 2026-11-11: **G1** a $150 pause-and-ask budget cap
+between blocks, a $200 Console limit, and a pre-registered era check for gaps over 6 hours; **G2** a too-noisy-control rule (stable
+control drift above M = 10 points turns would-be findings into "inconclusive at this noise level"); **G3** no minimum stable size:
+the D57 interval rule makes thin data read "inconclusive", with detection rates reported at the realized size; **G4** failed calls
+defined mechanically only, with a 2% stop-and-investigate ceiling (odd but well-formed reasoning is data, not failure); **G5** the crowd
+stays primary, with a pre-registered secondary two-rater panel adjudicated by the owner (details private until the debrief); **G6**
+post-freeze fixes only for departures from the frozen text, both results always reported, verification before unsealing; **G7** a
+null or opposite wording for every claim, now in the wording sheet. Code still to build: the budget cap, the failed-call ceiling and
+the era check.
+
 ## Parked for later passes
 
 - Pass 2: the story in plain language, and the claims table (if we see X we claim Y; if not, we claim nothing).
