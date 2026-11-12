@@ -13,6 +13,9 @@ appears (the glossary says how). Every claim is scoped to "this agent, these fie
 - **A minimal agent.** One model call per customer; no tools, no memory between calls, no retrieval: the decision step of an agent, isolated. We
   chose this on purpose: tools and memory add variables, and in an agent with tools the tool outputs *are* the data (an agent that looks its
   customer tier up in master data inherits the master data's errors).
+- **One link, not a chain.** We measure how much one agent's decision depends on what it is handed; in a chain of agents, that is the
+  per-link term. An upstream agent's output is data too, and it is always well-formed. How errors travel along a chain is untested here
+  (backlog: X1, agent chaining).
 - **One model, one prompt.** `claude-haiku-4-5-20251001`, temperature 0, a fixed prompt that gives no decision criteria. The design works for any
   model; our numbers are for this one.
 - **Synthetic customers.** 1,000 generated customers; no real people.
@@ -86,7 +89,7 @@ explains the odd value away.]
 separately and labelled soft (model confidence is weakly calibrated). Refusal was not available: the agent returned a priority and a
 confidence. Judge-based labels are provisional until a human audit.
 
-**Will not say:** that the agent *cannot* detect problems. The claim is about unprompted behavior when no flag option or instruction to check is offered; what happens if you ask is untested (backlog: Experiment 1c).
+**Will not say:** that the agent *cannot* detect problems. The claim is about unprompted behavior when no flag option or instruction to check is offered; what happens if you ask is untested (backlog: the in-agent controls experiment).
 
 **If the result goes the other way** *(pre-mortem G7)*
 - *The agent often does flag bad data.* **Plain:** Even without being asked, the agent often told us when the data was wrong: it flagged the problem in [x]% of cases with altered data, against [y]% with clean data. That is good news, and it means the in-agent check is worth building on; how reliably it does so depends on [field / error type]. **Technical:** H5 detection rates with intervals; the claim's title becomes "it often tells you, unprompted".

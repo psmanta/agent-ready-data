@@ -171,6 +171,7 @@ The following experiments are planned based on current research directions. This
 | Authoritative | 1e: Incompleteness vs noise | 🔲 Backlog |
 | Authoritative | 1f: Provenance blindness | 🔲 Backlog |
 | Timely | 2a: Staleness | 🔲 Backlog |
+| Cross-pillar | X1: Agent chaining (data cascades across agents) | 🔲 Backlog |
 | Contextual | TBD | 🔲 Future |
 | Comprehensive | TBD | 🔲 Future |
 | Responsible | TBD | 🔲 Future |

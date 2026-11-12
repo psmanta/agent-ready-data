@@ -154,6 +154,28 @@ Phase 2 expands the research in two directions:
 
 **Cross-pillar synthesis (Phase 1.5):** Before expanding to new domains, the interactions between pillars will be explored. Phase 1 tests each data condition in isolation, a controlled but artificial scenario. Real enterprise data fails across multiple dimensions simultaneously. Phase 1.5 will design experiments that combine pillar failure modes and measure whether effects are additive, compounding, or whether one failure mode dominates. This is where the Agentic Data Contract framework moves from diagnostic to prescriptive, helping practitioners prioritize which data conditions to address first when resources are constrained.
 
+**Cross-pillar experiment backlog**
+
+| ID | Experiment | Status | Notes |
+|----|-----------|--------|-------|
+| X1 | Agent chaining: data cascades across agents | 🔲 Backlog | When one agent's decision becomes the next agent's input, how far does a data error travel, and do contracts and canaries at each handoff contain it? The first cross-pillar experiment: failures from different pillars are injected at the head of the chain. |
+
+**X1 in more detail (draft, not pre-registered).** *Origin:* the 1b macro review, red-team pass RT9 (an enterprise architect: "your agent decides alone; mine are chained"). *Why it matters:* an upstream agent's output is data, and it is always well-formed, so every error it passes on arrives looking believable. 1b measures one link: how much one decision depends on what the agent is handed. X1 asks what happens across links. To my knowledge no one has measured this with explicit handoff contracts and per-link canaries. *Sketch:* a retail chain of minimal agents (for example triage → offer → pricing), each with its own clean baseline, reusing 1b's collection machinery (blocks, clean re-run control, stratification by stable and boundary customers). *Candidate questions, to become hypotheses at design time:*
+- **Chain length:** how does the end-of-chain change grow (or shrink) from 2 to 3 to 5 links? Does the product of the measured per-link dependencies predict it, or do links amplify or dampen beyond that?
+- **Error size:** does the cascade scale with the size of the initial error (1b's ladder of error sizes)?
+- **Believability:** does a believable upstream error travel further than an absurd one, and does any downstream agent catch it?
+- **Entry point:** does an error entering mid-chain behave differently from one at the head?
+- **The chain's own variation:** how much does the end of the chain change on clean input alone, because each agent's output varies from window to window (1b's window effect, compounded)? This is the chain's clean re-run control.
+- **Cross-pillar failures:** inject a wrong value (Authoritative), a missing field (Comprehensive), a stale value (Timely) or a business-definition mismatch (Contextual) at the head and compare the cascades.
+- **Contracts and canaries:** does a check on each handoff stop the cascade, at what cost in blocked decisions, and do canaries at each link correctly identify which agent moved first (attribution accuracy)?
+
+*Depends on:* 1b's results (the per-link term and the window effect) and at least one experiment from a second pillar.
+
+**Parked from the 1b macro review (IDs to assign)**
+- **In-agent controls:** do cheap controls inside the agent work: an instruction to flag bad data, an explicit flag field, a verification tool, handing it only the fields it needs? (RT5, D45; tests "unless you ask, it won't tell you".)
+- **A second model tier:** replicate 1b's core results on a different model (RT5, D46).
+- **Temperature in isolation:** decision instability as a function of temperature, run separately from every data condition (see Open Questions).
+
 **Multi-domain replication:** Apply Pillar 1 experiments across healthcare, finance, and logistics to test whether failure modes and severity generalize beyond retail. The domain assumption documented in Phase 1 will be revisited with empirical evidence.
 
 **Agentic memory and knowledge structures:** Phase 1 explores how business context and knowledge structures provided as static input affects decision quality. Phase 2 goes further, examining how agent memory, knowledge graphs, and context persistence that evolve across sessions introduce new failure modes. When an agent can remember, retrieve, and reason across interactions, the contract with its data becomes significantly more complex, and the consequences of bad data compound rather than resetting with each call.
