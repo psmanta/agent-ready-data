@@ -38,7 +38,8 @@ from pathlib import Path
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from collection_common import block_paths, block_status, load_plan, read_jsonl, sha256_file  # noqa: E402
+from collection_common import (block_paths, block_status, load_plan, read_jsonl, sha256_file,  # noqa: E402
+                               DEFAULT_BUDGET_USD, spend_so_far, failure_summary, compute_eras)
 
 
 def parse_blocks(spec: str, n_blocks: int) -> List[int]:
@@ -119,6 +120,9 @@ def main() -> int:
     ap.add_argument("--allow_version_mismatch", action="store_true",
                     help="run even if the installed request libraries differ from the pinned versions (never for confirmatory data)")
     ap.add_argument("--cost_per_call", type=float, default=0.00256, help="standard price per call, for the estimate only")
+    ap.add_argument("--budget_usd", type=float, default=DEFAULT_BUDGET_USD,
+                    help=f"pause before a block would take recorded spend past this (default ${DEFAULT_BUDGET_USD:.0f}); "
+                         "finished blocks are kept: raise it and re-run to continue")
     ap.add_argument("--dry_run", action="store_true", help="show what would run; send nothing")
     ap.add_argument("--yes", action="store_true", help="confirm that real API calls should be made")
     a = ap.parse_args()
@@ -161,8 +165,19 @@ def main() -> int:
         return 2
     keep_awake(a.no_caffeinate)
     failed = []
+    fallback = a.cost_per_call * (0.5 if a.mode == "batch" else 1.0)
     for b in todo:
         paths = block_paths(a.plan_dir, b)
+        # G1: the budget guard, checked only between blocks; a batch already sent always finishes
+        sp = spend_so_far(a.plan_dir, n_blocks)
+        per = sp["mean_per_row"] if sp["priced_rows"] >= 100 else fallback
+        need = len(by_block[b]) - len(block_status(a.plan_dir, b, by_block[b])["valid"]) if by_block[b] else 0
+        estimate = need * per
+        if sp["usd"] + estimate > a.budget_usd:
+            print(f"\n⏸  PAUSED before block {b}: recorded spend ${sp['usd']:,.2f} + this block's estimate ${estimate:,.2f} "
+                  f"would pass the ${a.budget_usd:,.2f} budget. Every finished block is kept. If this is expected, re-run "
+                  f"the same command with --budget_usd set higher; if not, investigate before continuing.")
+            return 3
         if sha256_file(paths["input"]) != plan["block_input_sha256"][b - 1]:
             print(f"❌ block {b}: the block input file does not match the plan (it was altered); refusing to run it.")
             failed.append(b)
@@ -190,10 +205,20 @@ def main() -> int:
             failed.append(b)
             print(f"  ❌ block {b} is still incomplete after {attempts} attempt(s): {len(st['missing'])} missing, "
                   f"{len(st['invalid'])} invalid, {len(st['bad_hash'])} on the wrong input. See {paths['log']}.")
+    eras = compute_eras(a.plan_dir, n_blocks)
+    for g in eras["gaps_over_threshold"]:
+        print(f"  ⓘ era break: {g['hours']:.1f} h between block {g['after_block']} and block {g['before_block']} "
+              f"(over {eras['gap_hours_threshold']:.0f} h); the analysis reports eras separately (pre-mortem G1)")
+    fs = failure_summary(a.plan_dir, by_block, chosen)
+    if fs["over_ceiling"]:
+        print(f"\n🛑 STOP: {fs['failed']:,} of {fs['tasks']:,} attempted tasks ({fs['rate']:.1%}) are still failed calls after "
+              f"retries, over the {fs['ceiling']:.0%} ceiling (pre-mortem G4). Investigate before any analysis; "
+              "collect_results.py refuses to write while this holds.")
+        return 4
     if failed:
         print(f"\n❌ {len(failed)} block(s) incomplete: {failed}. Re-run the same command to retry them.")
         return 1
-    print(f"\n✅ all {len(todo)} selected block(s) complete.")
+    print(f"\n✅ all {len(todo)} selected block(s) complete. Failed calls: {fs['rate']:.2%} of attempted tasks.")
     return 0
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from collection_common import block_paths, block_status, load_plan, read_jsonl  # noqa: E402
+from collection_common import failure_summary, compute_eras, block_paths, block_status, load_plan, read_jsonl  # noqa: E402
 
 
 def output_path_for(experiments_output: Path, stratum: str) -> Path:
@@ -32,7 +32,7 @@ def output_path_for(experiments_output: Path, stratum: str) -> Path:
 
 
 def collect(plan_dir: Path, experiments_output: Path, allow_incomplete: bool = False, overwrite: bool = False,
-            status_only: bool = False) -> Dict[str, Any]:
+            status_only: bool = False, override_failure_ceiling: bool = False) -> Dict[str, Any]:
     plan, by_block = load_plan(plan_dir)
     rows_by_task: Dict[str, Dict[str, Any]] = {}
     per_block, missing, invalid, bad_hash = {}, [], [], []
@@ -50,7 +50,15 @@ def collect(plan_dir: Path, experiments_output: Path, allow_incomplete: bool = F
     report = {"n_tasks": plan["n_tasks"], "valid_tasks": len(rows_by_task), "missing": len(missing),
               "invalid": len(invalid), "wrong_input": len(bad_hash), "complete_strata": len(complete_strata),
               "incomplete_strata": incomplete_strata, "per_block": per_block, "written": []}
+    fs = failure_summary(plan_dir, by_block, list(range(1, plan["blocks"] + 1)))
+    eras = compute_eras(plan_dir, plan["blocks"])
+    report["failed_calls"] = fs
+    report["eras"] = eras
     if status_only:
+        return report
+    if fs["over_ceiling"] and not override_failure_ceiling:          # pre-mortem G4: stop before any analysis
+        report["refused"] = True
+        report["refused_reason"] = "failure_ceiling"
         return report
     if incomplete_strata and not allow_incomplete:
         report["refused"] = True
@@ -73,6 +81,7 @@ def collect(plan_dir: Path, experiments_output: Path, allow_incomplete: bool = F
                 row["record_id"] = t["source_record_id"]
                 row["collection_block"] = t["block"]
                 row["collection_task_id"] = t["task_id"]
+                row["collection_era"] = eras["block_era"].get(t["block"])
                 f.write(json.dumps(row, default=str) + "\n")
         report["written"].append(str(out))
     windows = {}
@@ -82,7 +91,8 @@ def collect(plan_dir: Path, experiments_output: Path, allow_incomplete: bool = F
             windows[b] = json.load(open(w))
     report["total_cost_usd"] = round(cost, 4)
     report["windows"] = windows
-    (plan_dir / "collection_report.json").write_text(json.dumps(report, indent=2))
+    (plan_dir / "collection_report.json").write_text(json.dumps(report, indent=2, default=str))
+    (plan_dir / "collection_eras.json").write_text(json.dumps(eras, indent=2, default=str))
     return report
 
 
@@ -93,15 +103,24 @@ def main() -> int:
     ap.add_argument("--status", action="store_true", help="show progress and write nothing")
     ap.add_argument("--allow_incomplete", action="store_true", help="write the strata that ARE complete; list the rest")
     ap.add_argument("--overwrite", action="store_true", help="replace existing decisions files")
+    ap.add_argument("--override_failure_ceiling", action="store_true",
+                    help="write even though failed calls exceed the 2%% ceiling (a logged deviation, never routine)")
     a = ap.parse_args()
     eo = a.experiments_output or a.plan_dir.resolve().parent
-    r = collect(a.plan_dir, eo, a.allow_incomplete, a.overwrite, a.status)
+    r = collect(a.plan_dir, eo, a.allow_incomplete, a.overwrite, a.status, a.override_failure_ceiling)
     pct = 100 * r["valid_tasks"] / r["n_tasks"]
     print(f"{r['valid_tasks']:,} of {r['n_tasks']:,} tasks have a valid decision ({pct:.1f}%): {r['missing']:,} missing, "
           f"{r['invalid']:,} invalid (PARSE_ERROR or unusable), {r['wrong_input']:,} made on the wrong input")
     print(f"{r['complete_strata']} strata complete; {len(r['incomplete_strata'])} incomplete")
     if a.status:
         return 0
+    fs = r["failed_calls"]
+    print(f"failed calls: {fs['failed']:,} of {fs['tasks']:,} attempted tasks ({fs['rate']:.2%}; ceiling {fs['ceiling']:.0%}) | "
+          f"eras: {r['eras']['n_eras']} ({len(r['eras']['gaps_over_threshold'])} gap(s) over {r['eras']['gap_hours_threshold']:.0f} h)")
+    if r.get("refused_reason") == "failure_ceiling":
+        print("🛑 not writing: failed calls exceed the 2% ceiling (pre-mortem G4). Investigate first; "
+              "--override_failure_ceiling exists for a logged deviation only.")
+        return 1
     if r.get("refused"):
         print(f"❌ not writing: {len(r['incomplete_strata'])} stratum(s) incomplete, for example {r['incomplete_strata'][:3]}. "
               "Finish them with run_collection.py, or pass --allow_incomplete to write only the complete ones.")

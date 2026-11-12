@@ -36,8 +36,9 @@ MODEL = "claude-haiku-4-5-20251001"
 
 class FakeBatches:
     """Enough of client.messages.batches to exercise the runner: create, retrieve, results."""
-    def __init__(self, polls_until_end=2, fail_once=(), expire_once=(), interrupt_on_retrieve=False):
+    def __init__(self, polls_until_end=2, fail_once=(), expire_once=(), interrupt_on_retrieve=False, fail_always=()):
         self.batches, self.creates, self.polls_until_end = {}, 0, polls_until_end
+        self.fail_always = set(fail_always)
         self.fail_once, self.expire_once = set(fail_once), set(expire_once)
         self.interrupt_on_retrieve = interrupt_on_retrieve
     def create(self, requests):
@@ -58,6 +59,8 @@ class FakeBatches:
         reqs = list(self.batches[bid]["requests"]); random.Random(bid).shuffle(reqs)     # any order, as documented
         for r in reqs:
             cid = r["custom_id"]
+            if cid in self.fail_always:
+                yield {"custom_id": cid, "result": {"type": "errored"}}; continue
             if cid in self.fail_once:
                 self.fail_once.discard(cid); yield {"custom_id": cid, "result": {"type": "errored"}}; continue
             if cid in self.expire_once:
@@ -216,5 +219,103 @@ try:
 finally:
     sys.argv = old; A.PINNED_PACKAGES.clear(); A.PINNED_PACKAGES.update(saved)
 assert rc_ == 2 and fc.messages.batches.creates == n_before; ok("a real run with request libraries other than the pinned ones is refused before anything is sent")
+
+print("Q7  pre-mortem guards: budget pause (G1), failed-call ceiling (G4), era check (G1)")
+def fresh_plan(name):
+    eo = WORK / name
+    g = subprocess.run([sys.executable, "generate_dithered_data.py", "--n", "12", "--seed", "7", "--clean-reruns", "1", "--out", str(eo)], capture_output=True, text=True)
+    assert g.returncode == 0, g.stdout[-400:] + g.stderr[-400:]
+    quiet(PC.write_plan, eo, eo / "collection", B, 5, 11)
+    return eo / "collection", CC.load_plan(eo / "collection")[1]
+def rc_in(plan_dir, *args):
+    old = sys.argv; sys.argv = ["run_collection.py", "--plan_dir", str(plan_dir), "--no_caffeinate", "--poll_seconds", "0", "--allow_version_mismatch", "--yes", *args]
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf): code = RC.main()
+        return code, buf.getvalue()
+    finally: sys.argv = old
+def collect_in(plan_dir, *args):
+    return subprocess.run([sys.executable, "collect_results.py", "--plan_dir", str(plan_dir), *args], capture_output=True, text=True)
+
+# G1 budget: allow block 1 only (the estimate before 100 priced rows is the --cost_per_call fallback at half price)
+P7, bb7 = fresh_plan("q7_budget")
+fc = FakeClient(); BR.default_client = lambda: fc
+est1 = len(bb7[1]) * 0.00256 * 0.5
+code, out = rc_in(P7, "--budget_usd", f"{est1 * 1.5:.6f}")
+assert code == 3 and "PAUSED before block 2" in out; ok("the run pauses before the block that would pass the budget, with a distinct exit code (3) and a message saying what to do")
+assert CC.block_status(P7, 1, bb7[1])["complete"] and not CC.block_paths(P7, 2)["decisions"].exists() and fc.messages.batches.creates == 1
+ok("the finished block is kept and nothing was sent for the paused block")
+sp = CC.spend_so_far(P7, B)
+assert sp["rows"] == len(bb7[1]) and abs(sp["usd"] - len(bb7[1]) * 0.5 * std_cost) < 1e-9; ok("spend so far is the sum of recorded cost_usd across every decisions file")
+code, out = rc_in(P7, "--budget_usd", "1000")
+assert code == 0 and all(CC.block_status(P7, b, bb7[b])["complete"] for b in range(1, B + 1)) and fc.messages.batches.creates == B
+ok("raising the budget and re-running continues from block 2; block 1 is never re-sent")
+code, out = rc_in(P7, "--budget_usd", "0")
+assert code == 0 and "nothing to do" in out; ok("a budget below the spend already recorded does not block a run that has nothing left to send")
+
+# G4 failure ceiling: permanently failing requests, above and below 2%
+P8, bb8 = fresh_plan("q7_fail")
+n8 = sum(len(v) for v in bb8.values())
+tasks8 = [t["task_id"] for b in sorted(bb8) for t in bb8[b]]
+k_over = int(n8 * 0.02) + 1
+fc = FakeClient(fail_always=set(random.Random(5).sample(tasks8, k_over))); BR.default_client = lambda: fc
+code, out = rc_in(P8, "--retries", "1")
+assert code == 4 and "STOP" in out and f"{k_over:,} of {n8:,}" in out; ok(f"{k_over} of {n8} tasks still failed after retries ({k_over / n8:.1%}) is over 2%: the run stops with exit code 4 and says to investigate")
+r = collect_in(P8, "--allow_incomplete")
+assert r.returncode == 1 and "not writing" in r.stdout and not (P8 / "collection_report.json").exists(), r.stdout[-300:]
+ok("collect_results.py refuses to write while the ceiling is exceeded, even with --allow_incomplete")
+r = collect_in(P8, "--allow_incomplete", "--override_failure_ceiling")
+assert r.returncode == 0, r.stdout[-400:]; rep8 = json.load(open(P8 / "collection_report.json"))
+assert rep8["failed_calls"]["failed"] == k_over and rep8["failed_calls"]["over_ceiling"]; ok("the explicit override writes, and the report still records the failed-call rate and that it was over the ceiling")
+fs = CC.failure_summary(P8, bb8, list(range(1, B + 1)))
+assert fs["tasks"] == n8 and abs(fs["rate"] - k_over / n8) < 1e-12; ok("the rate is failed tasks over attempted tasks")
+# under the ceiling: drop enough failures (by marking them answered) to fall to 2% or below
+P9, bb9 = fresh_plan("q7_under")
+tasks9 = [t["task_id"] for b in sorted(bb9) for t in bb9[b]]
+k_under = max(0, int(len(tasks9) * 0.02))
+fc = FakeClient(fail_always=set(random.Random(6).sample(tasks9, k_under))); BR.default_client = lambda: fc
+code, out = rc_in(P9, "--retries", "0")
+assert code == (1 if k_under else 0) and "STOP" not in out; ok(f"{k_under} of {len(tasks9)} failed ({k_under / len(tasks9):.1%}, at or under 2%) is reported but does not stop the run")
+fs = CC.failure_summary(P9, bb9, [1])
+assert fs["attempted_blocks"] == 1 and fs["tasks"] == len(bb9[1]); ok("only blocks that have been attempted count toward the rate")
+# G4 definition: an unparseable or off-label answer is a failure; odd but well-formed reasoning is not
+st = CC.block_status(P7, 1, bb7[1]); tid = next(iter(st["valid"]))
+dpath = CC.block_paths(P7, 1)["decisions"]; rows1 = CC.read_jsonl(dpath)
+odd = [dict(x, decision_reasoning="banana " * 3) if x["record_id"] == tid else x for x in rows1]
+dpath.write_text("".join(json.dumps(x) + "\n" for x in odd))
+assert CC.failure_summary(P7, bb7, [1])["failed"] == 0; ok("odd but well-formed reasoning is data, not a failed call")
+bad = [dict(x, business_decision="MAYBE") if x["record_id"] == tid else x for x in rows1]
+dpath.write_text("".join(json.dumps(x) + "\n" for x in bad))
+assert CC.failure_summary(P7, bb7, [1])["failed"] == 1; ok("a decision other than HIGH, MEDIUM or LOW priority is a failed call")
+dpath.write_text("".join(json.dumps(x) + "\n" for x in rows1))
+
+# G1 era check: rewrite the recorded window times
+def set_windows(plan_dir, starts_h, dur_h=1.0):
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 11, 20, 8, 0, tzinfo=timezone.utc)
+    for b, h in enumerate(starts_h, start=1):
+        wp = CC.block_paths(plan_dir, b)["window"]; w = json.load(open(wp))
+        w["started_at"] = (t0 + timedelta(hours=h)).isoformat(); w["finished_at"] = (t0 + timedelta(hours=h + dur_h)).isoformat()
+        wp.write_text(json.dumps(w))
+set_windows(P7, [0, 1, 2, 9, 10, 17])          # gaps after blocks 3 and 5: 6 h exactly? no: 9-3=6 h (not over), 17-11=6 h
+e = CC.compute_eras(P7, B)
+assert e["n_eras"] == 1 and not e["gaps_over_threshold"]; ok("a gap of exactly 6 hours does not start a new era (the rule is more than 6)")
+set_windows(P7, [0, 1, 2, 9.5, 10.5, 30])
+e = CC.compute_eras(P7, B)
+assert e["n_eras"] == 3 and [g["after_block"] for g in e["gaps_over_threshold"]] == [3, 5] and e["block_era"] == {1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3}
+ok("gaps of 6.5 and 18.5 hours split the run into three eras, and every block is assigned to one")
+set_windows(P7, [20, 0, 1, 2, 3, 4])            # block 1 re-run last: eras follow time, not block number
+e = CC.compute_eras(P7, B)
+assert e["block_era"][1] == 2 and e["n_eras"] == 2 and e["gaps_over_threshold"][0]["before_block"] == 1; ok("eras follow the recorded times, not block numbers (a block re-run later lands in the later era)")
+set_windows(P7, [0, 1, 2, 9.5, 10.5, 30])
+r = collect_in(P7)
+assert r.returncode == 0 and "eras: 3" in r.stdout, r.stdout[-400:]
+rep7 = json.load(open(P7 / "collection_report.json")); eras7 = json.load(open(P7 / "collection_eras.json"))
+assert rep7["eras"]["n_eras"] == 3 and eras7["n_eras"] == 3; ok("collect_results.py writes collection_eras.json and puts the eras in collection_report.json")
+plan7 = CC.load_plan(P7)[0]
+era_of = {t["task_id"]: t["block"] for b in bb7 for t in bb7[b]}
+rows_out = [x for f in sorted((P7.parent).rglob("*.jsonl")) if "collection" not in f.parts for x in CC.read_jsonl(f, tolerant=True) if "collection_era" in x]
+assert rows_out and all(x["collection_era"] == eras7["block_era"][str(x["collection_block"])] for x in rows_out)
+ok(f"every collected row ({len(rows_out)}) carries collection_era, matching its block's era")
 
 print(f"\n{n_checks} check groups passed")

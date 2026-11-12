@@ -98,3 +98,72 @@ def block_status(plan_dir: Path, block: int, tasks: List[Dict[str, Any]]) -> Dic
             valid[t["task_id"]] = r
     return {"n": len(tasks), "valid": valid, "bad_hash": bad_hash, "invalid": invalid, "missing": missing,
             "complete": len(valid) == len(tasks)}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Pre-mortem guards (G1 budget, G4 failed calls, G1 era check); decided by the owner 2026-11-11
+# ---------------------------------------------------------------------------------------------------------------------
+
+DEFAULT_BUDGET_USD = 150.0     # G1: pause-and-ask between blocks; never cuts a batch off
+FAILURE_CEILING = 0.02         # G4: share of attempted tasks still failed after retries (mechanical failures only)
+ERA_GAP_HOURS = 6.0            # G1: a gap longer than this between consecutive blocks starts a new era
+
+
+def spend_so_far(plan_dir: Path, n_blocks: int) -> Dict[str, float]:
+    """Recorded cost of every row in every block's decisions file (retried and failed rows included: they were billed)."""
+    total, n, priced = 0.0, 0, 0
+    for b in range(1, n_blocks + 1):
+        for r in read_jsonl(block_paths(plan_dir, b)["decisions"], tolerant=True):
+            n += 1
+            c = r.get("cost_usd")
+            if isinstance(c, (int, float)):
+                total += c
+                priced += 1
+    return {"usd": total, "rows": n, "priced_rows": priced, "mean_per_row": (total / priced) if priced else None}
+
+
+def failure_summary(plan_dir: Path, by_block: Dict[int, List[Dict[str, Any]]], blocks: List[int]) -> Dict[str, Any]:
+    """G4: failed calls among ATTEMPTED blocks (a block counts once it has a decisions file). A failed call is mechanical:
+    missing (errored or expired and not recovered), invalid (no HIGH/MEDIUM/LOW decision, i.e. unparseable), or made on the
+    wrong input. Odd but well-formed reasoning is data, never a failure."""
+    attempted = [b for b in blocks if block_paths(plan_dir, b)["decisions"].exists()]
+    n = failed = 0
+    for b in attempted:
+        st = block_status(plan_dir, b, by_block[b])
+        n += st["n"]
+        failed += len(st["missing"]) + len(st["invalid"]) + len(st["bad_hash"])
+    rate = failed / n if n else 0.0
+    return {"attempted_blocks": len(attempted), "tasks": n, "failed": failed, "rate": rate, "ceiling": FAILURE_CEILING,
+            "over_ceiling": rate > FAILURE_CEILING}
+
+
+def _ts(x):
+    from datetime import datetime
+    return datetime.fromisoformat(str(x).replace("Z", "+00:00"))
+
+
+def compute_eras(plan_dir: Path, n_blocks: int, gap_hours: float = ERA_GAP_HOURS) -> Dict[str, Any]:
+    """G1 era check: order finished blocks by start time; a gap of more than gap_hours between one block's end and the next
+    block's start begins a new era. Returns the eras, every gap over the threshold, and each block's era."""
+    import json as _json
+    windows = []
+    for b in range(1, n_blocks + 1):
+        w = block_paths(plan_dir, b)["window"]
+        if w.exists():
+            d = _json.load(open(w))
+            windows.append((b, _ts(d["started_at"]), _ts(d["finished_at"])))
+    windows.sort(key=lambda t: t[1])
+    eras, gaps, block_era = [], [], {}
+    for i, (b, start, end) in enumerate(windows):
+        if i == 0:
+            eras.append({"era": 1, "blocks": [], "start": start.isoformat(), "end": end.isoformat()})
+        else:
+            prev_end = windows[i - 1][2]
+            gap = (start - prev_end).total_seconds() / 3600
+            if gap > gap_hours:
+                gaps.append({"after_block": windows[i - 1][0], "before_block": b, "hours": round(gap, 2)})
+                eras.append({"era": len(eras) + 1, "blocks": [], "start": start.isoformat(), "end": end.isoformat()})
+        eras[-1]["blocks"].append(b)
+        eras[-1]["end"] = max(_ts(eras[-1]["end"]), end).isoformat()
+        block_era[b] = eras[-1]["era"]
+    return {"gap_hours_threshold": gap_hours, "n_eras": len(eras), "eras": eras, "gaps_over_threshold": gaps, "block_era": block_era}
