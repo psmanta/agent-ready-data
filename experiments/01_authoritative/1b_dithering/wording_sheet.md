@@ -16,6 +16,8 @@ appears (the glossary says how). Every claim is scoped to "this agent, these fie
 - **One link, not a chain.** We measure how much one agent's decision depends on what it is handed; in a chain of agents, that is the
   per-link term. An upstream agent's output is data too, and it is always well-formed. How errors travel along a chain is untested here
   (backlog: X1, agent chaining).
+- **Structured fields only.** We measure dependence on information presented as labelled fields; whether it holds when the same information
+  arrives as retrieved text is untested.
 - **One model, one prompt.** `claude-haiku-4-5-20251001`, temperature 0, a fixed prompt that gives no decision criteria. The design works for any
   model; our numbers are for this one.
 - **Synthetic customers.** 1,000 generated customers; no real people.
@@ -102,15 +104,30 @@ field is wrong in your data (the prevalence), and what it costs to fix. We measu
 by cost; the worksheet below leaves your two columns blank. Start with a map of which data each decision depends on and how much each field moves it
 (a decision-to-data dependency map). Our impact ranking for this decision: [ranked fields].
 
-Check the data before the agent reads it (at the point of use), not after it decides. Think in layers: check at the point of use; hand the agent only
+Check the data before the agent reads it (at the point of use), not after it decides. Most hygiene belongs off the request path: scheduled
+deduplication and cleansing at the source, ranked by the dependency map, with no latency and no tokens. The point-of-use check stays, small and
+deterministic (rules on the few fields the decision depends on: microseconds, no model calls), because data keeps changing after the nightly run.
+Think in layers: hygiene at the source; check at the point of use; hand the agent only
 the fields the decision needs (an idea we have not tested); keep a canary set, a few known-clean records mixed in with live traffic (a flip on a canary is the model's variance; a failed check is the data); and keep a person on the borderline and high-stakes cases, which are hit first [if H6 holds]. You
-can measure the impact term on your own decisions with the same method, at small scale.
+can measure the impact term on your own decisions with the same method, at small scale. If your agent reads retrieved text rather than fields,
+the same method still works: corrupt a value at its source, let it flow through retrieval, and see whether the decision moves; the point of
+use is then the step that assembles the agent's context, where provenance and freshness are checked, and the values a decision leans on are
+checked against the source of record. If you bought the agent, the method still works from your side: you control the input, so corrupt
+your own payload on a test endpoint and see whether its decisions move.
 
 **As a contract, it has two sides and a third owner.** The data side (the engineer) asserts the payload: types, ranges, referential integrity, cross-field
 consistency, freshness. These are deterministic, and the dependency map ranks them: blocking for the fields the decision depends on, warnings for the rest. The
 decision side (the agent's owner) reports a stability figure measured on the canary set, versioned with the model snapshot, the prompt and the platform; when any
 of them changes the map is stale and the sensitivity test is re-run. The business owner sets how much autonomy the agent has and where a person reviews. A
-flip on a clean canary record is the model's variance; a flip that follows a failed assertion is the data.
+flip on a clean canary record is the model's variance; a flip that follows a failed assertion is the data. **When a check fails,** the dependency map and
+the stakes decide: a failure on a field the decision depends on, in a high-stakes decision, is held and routed to a person (a queue, not a stalled process);
+a failure on a field the decision barely uses passes and is logged. The business owner sets that line; we measure which fields matter, not what a held
+decision costs against a wrong one. *Expect a follow-up* ("we deployed agents to replace people, and you want a person reviewing?"). Do not argue replace
+versus augment; one line is enough: "only the held cases, which the map keeps few, and how much autonomy the agent gets is your call." **When the agent is bought,** the contract
+moves to procurement: the buyer still signs the payload side, and asks the vendor for schema-conformant output, an agent-configuration version on every
+response (model, prompt and tools), advance notice of changes with a window to stay on the previous version, and an allowance for canary runs. The canary
+becomes the buyer's acceptance test, run on a schedule and on every version change, against a drift threshold named in the contract. [Asks to negotiate,
+not standard terms; legal and procurement decide.]
 
 Cost: [x]% of the money spent on decisions bought a decision the bad data changed, and finding the bad ones means re-running [y] decisions, about $[z].
 
@@ -191,7 +208,7 @@ answers), not the libraries, not the data change under test. Cause unknown (serv
 | Decision-to-data dependency map | For each decision an agent makes, which data it depends on and how much each field moves it. | A table of decisions by fields, filled with measured drift per field (H1) and by error size and type (H2, H4). |
 | Decision stability | How little the decision moves when the data is wrong. The thing we measure. | One minus drift from the reference decision, for customers whose value actually changed. |
 | Impact, prevalence, cost | The three numbers behind "what to fix first": how much an error moves the decision (we measure), how often it happens, what it costs to fix (yours). | Impact x prevalence / cost; our contribution is the first term. |
-| Point of use | The moment an agent receives the data for one decision, however tangled the systems behind it. | The agent's input-assembly step: the record or context passed to the model. |
+| Point of use | The moment an agent receives the data for one decision, however tangled the systems behind it. | The agent's input-assembly step: the record or context passed to the model. For a retrieval agent, the step that assembles the retrieved context. |
 | Minimal agent | An AI that is handed one record and decides, with no tools, no memory and no lookups. The decision step of an agent, on its own. | One model call per record; no tools, no retrieval, no memory between calls; fixed prompt and output schema. |
 | Agentic data contract (practical form) | A short, machine-checkable list of rules about the data an agent reads for one decision, ranked by how much the decision depends on each field, with a named owner on each side. | Payload assertions (deterministic: types, ranges, referential integrity, cross-field consistency, freshness), blocking or warning by measured dependency; a decision-stability figure on a canary set, versioned with the model fingerprint; an autonomy level set by the business. |
 | Synthetic data | Customers we generated; none are real people. | Generated records; any resemblance of an email to a real address is coincidence. |
@@ -202,6 +219,10 @@ answers), not the libraries, not the data change under test. Cause unknown (serv
 
 **Quotable now, scoped as a small check:** in a 30-customer check, 3 of 30 customers' decisions changed between sessions with nothing changed
 (exact 95% range 2.1% to 26.5%); changing the email format changed 0 of 30 (range 0.0% to 11.6%).
+
+**Quotable from 1a, in this wording only:** about 1 in 7 customers received conflicting decisions across their duplicate records, starting at the
+lowest duplication level tested (10%); the agent's confidence did not change. 1a predates the window-effect control, so part of that conflict may
+be the model's own variation (1a's results say so). Never "proved", "no safe level" without "of the levels tested", or "14% of decisions".
 
 **Not quotable until the run and the analysis:** every number in a [bracket] above.
 

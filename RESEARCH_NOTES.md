@@ -159,6 +159,7 @@ Phase 2 expands the research in two directions:
 | ID | Experiment | Status | Notes |
 |----|-----------|--------|-------|
 | X1 | Agent chaining: data cascades across agents | 🔲 Backlog | When one agent's decision becomes the next agent's input, how far does a data error travel, and do contracts and canaries at each handoff contain it? The first cross-pillar experiment: failures from different pillars are injected at the head of the chain. |
+| X2 | Presentation: same truth, different form; same words, different meaning | 🔲 Backlog | Does a decision change when true information is merely presented differently, and does it change when the same words carry a different meaning? Planned as cross-cutting; a strong result could argue for a new pillar. |
 
 **X1 in more detail (draft, not pre-registered).** *Origin:* the 1b macro review, red-team pass RT9 (an enterprise architect: "your agent decides alone; mine are chained"). *Why it matters:* an upstream agent's output is data, and it is always well-formed, so every error it passes on arrives looking believable. 1b measures one link: how much one decision depends on what the agent is handed. X1 asks what happens across links. To my knowledge no one has measured this with explicit handoff contracts and per-link canaries. *Sketch:* a retail chain of minimal agents (for example triage → offer → pricing), each with its own clean baseline, reusing 1b's collection machinery (blocks, clean re-run control, stratification by stable and boundary customers). *Candidate questions, to become hypotheses at design time:*
 - **Chain length:** how does the end-of-chain change grow (or shrink) from 2 to 3 to 5 links? Does the product of the measured per-link dependencies predict it, or do links amplify or dampen beyond that?
@@ -170,6 +171,22 @@ Phase 2 expands the research in two directions:
 - **Contracts and canaries:** does a check on each handoff stop the cascade, at what cost in blocked decisions, and do canaries at each link correctly identify which agent moved first (attribution accuracy)?
 
 *Depends on:* 1b's results (the per-link term and the window effect) and at least one experiment from a second pillar.
+
+**X2 in more detail (draft, not pre-registered).** *Origin:* the 1b macro review, red-team pass RT9 ("where is the field in a 2,000-token retrieved context?"), and D81. *The idea:* every pillar describes a way data fails to tell the truth. Here the truth can be fully intact and the decision may still move, because of how the information is presented. Presentation has two sides, and they make a two-by-two:
+
+| | The decision **should not** move | The decision **should** move |
+|---|---|---|
+| **What changes** | The *form*: the same facts as a JSON field, a table, a sentence, or a retrieved chunk among unrelated text | The *meaning*: the same words in a different context |
+| **The failure** | **Form sensitivity:** the agent reacts to the wrapper, not the content | **Surface anchoring:** the agent latches onto a word and misses what it means here |
+
+An agent we can trust is indifferent to form and sensitive to meaning. The second column is the Contextual pillar's question ("the truth the business defines"); the first belongs to no pillar yet. *Example (the owner's):* "horse" in a sentence about western films, in a sentence about a ride across the desert, in a structured record describing a horse (name, breed, age, training), and the sound-alike "hoarse" in a sentence about cheering at a football game: one short English word, four meanings. In the retail testbed the same thing happens with "churn" or "spend": "churn risk 0.8" in a field; "churned last spring and came back"; "spend dropped 40%" in a note about a competitor rather than the customer.
+
+*Arms (a sketch):*
+- **Arm A, form (clean):** the same 1b customers rendered as JSON, a table, template-written prose, and the same facts placed among unrelated retrieved chunks. Measure: how often the decision differs from the JSON decision, against the window-effect floor (1b's clean re-run control).
+- **Arm B, form with one corruption:** corrupt the field 1b finds the decision leans on most, the same way in every format. Does the dependence survive the format? (D79.)
+- **Arm C, meaning:** keep the decisive words and change what they mean (a figure about the customer vs about someone else; a past event vs a current one; a literal vs a figurative use). Measure: does the decision move when it should, and stay when only the wording changed?
+
+*Design cautions:* the text formats are written by templates, not by an LLM (an LLM rewrite can quietly change the information, which would test a summarizer, X1's link, not presentation); text first, images (for example a caption on a photo) as a later arm, because vision adds the model's image ability as a second variable; all arms share 1b's block design so form is never confounded with time. *Also a lesson for measurement:* a keyword scan has the same weakness (it counts "horse" whatever it means), which is one reason 1b's human audit exists. *Order:* after 1b (Arm B needs 1b's top field); smaller in scope than 1b. *Pillar question:* run as cross-cutting first; if form sensitivity is large on clean data, consider whether it earns a pillar of its own.
 
 **Parked from the 1b macro review (IDs to assign)**
 - **In-agent controls:** do cheap controls inside the agent work: an instruction to flag bad data, an explicit flag field, a verification tool, handing it only the fields it needs? (RT5, D45; tests "unless you ask, it won't tell you".)
