@@ -35,6 +35,42 @@ That breaks into three business questions:
 | `statistical_methodology_note.md` | Why each statistical tool was chosen |
 | `h5_working_doc.md` | The working record for H5 (does the agent flag bad data?) |
 
+## Run the pattern on your own agent
+
+This folder is a research harness built on a controlled retail schema; it is not a package for your stack. The pattern behind it fits in a
+small wrapper around your agent's decision step, in any language or framework. A sketch (pseudocode):
+
+```text
+# 1. The decision is the action your agent commits to, not its prose.
+decision(trace)      = canonical(final_action(run_agent(trace, tools = DRY_RUN)))
+#    canonical(): a tool call or routing edge becomes an enum (approve / block / escalate);
+#    a number becomes the bands your business cares about; a ranked list becomes its top few.
+
+# 2. Tools: stub the ones that WRITE (capture the arguments, return a stubbed success, execute nothing);
+#    replay recorded responses for the ones that READ, so the input never changes between runs.
+
+# 3. Baseline: replay each unchanged trace 5 times, spread over different hours or days
+#    (in 1b's checks, repeats inside one session agreed; the changes appeared between sessions).
+stable = traces whose 5 baseline decisions all agree
+
+# 4. Perturb at the state boundary, one field at a time, just before the decision step runs,
+#    with a believable wrong value AND an absurd one.
+for field in fields:
+    for value in (believable_wrong(field), absurd(field)):
+        flip_rate[field, value] = share of stable traces whose decision differs from baseline
+```
+
+**A canary in production** is the same wrapper on a fixed set of stable traces: run it on a schedule and on every prompt deploy or model-version
+change. Stub the writes and replay the reads, so a flip means the model moved, not the data. Measure how often the canary moves on its own for a
+week or two before go-live and set the alarm above that (or alarm only when it trips twice in a row); when it trips, hold the affected decisions
+and route them to a person. **Canary the decision, not the action.**
+
+**Real traces are real data.** Mask customer identifiers and run the test in an environment your organisation has approved for sending data to
+a model provider; a permanent canary set built from historical traces is retained customer data.
+
+**Cost.** The API cost of a single-agent check is small; the real cost is a few days of an engineer's time, and the baseline replays take a few
+days by design.
+
 ## Ground-truth data
 
 The ground-truth dataset is validated against all six DAMA data quality dimensions (Accuracy, Completeness, Consistency, Timeliness, Validity, Uniqueness)

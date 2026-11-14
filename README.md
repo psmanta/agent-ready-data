@@ -53,7 +53,7 @@ Each experiment follows a consistent pipeline:
 
 - **Agent scope:** The agent is a decision-making engine. It receives data, reasons over it, and produces a structured judgment. It has no tools, no memory between calls, and no ability to take action in the world. It represents the cognitive core of a fuller agentic system. I believe this research is valid and relevant because this decision layer is present in virtually every agentic pipeline. If the decision engine is compromised by bad data, everything downstream is compromised as well.
 
-- **Model:** `claude-haiku-4-5-20251001` at temperature 0.0 for reproducibility in Phase 1. The choice is deliberate: this series measures how an agent's decisions depend on its data, not how capable any one model is, and a cost-efficient model keeps self-funded research sustainable. The design works for any model; the numbers are for the one named. The model used may evolve across the series, and each experiment documents the specific model version used.
+- **Model:** `claude-haiku-4-5-20251001` at temperature 0.0 in Phase 1, which removes sampling randomness (it does not make decisions deterministic; see Notes on Reproducibility). The choice is deliberate: this series measures how an agent's decisions depend on its data, not how capable any one model is, and a cost-efficient model keeps self-funded research sustainable. The design works for any model; the numbers are for the one named. The model used may evolve across the series, and each experiment documents the specific model version used.
 
 - **Confidence calibration:** Agent confidence is self-reported and has not been calibrated against ground truth (an objectively correct answer defined independently of the agent). A flat confidence curve does not imply accurate decisions, it may indicate the agent has no signal that something is wrong. Ground truth calibration is future work.
 
@@ -108,9 +108,10 @@ python3 evaluate_decision_quality.py \
 
 ### Notes on Reproducibility
 - Experiment outputs (agent inputs, raw decision files, evaluation reports) are excluded from this repository. They are fully regeneratable, by following the steps above.
-- The cluster maps (`experiments_output/eval/`) and decision summaries are included for reference. Note: these reflect the specific synthetic dataset I generated. Reproducing the experiment will generate different synthetic data and may produce different numerical results, though I expect the directional findings to hold.
-- Random seed is fixed at 42 in the data generator for reproducible synthetic data within a given run.
-- Temperature is fixed at 0.0 for deterministic agent decisions.
+- The cluster maps (`experiments_output/eval/`) and decision summaries are included for reference.
+- The data generator is seeded (42 for 1a), so rerunning it with the same library versions reproduces the same synthetic data. Faker is not pinned to an exact version in `requirements.txt`, and a different version can change the generated values; 1b records a hash of every generated file in its generation manifest, so a difference is detectable.
+- Temperature is fixed at 0.0 to remove sampling randomness. It does not make decisions deterministic: the same input can get a different decision in a different session (what 1b calls the window effect, measured by its clean re-run control). Rerunning the agent will therefore not reproduce every decision exactly, though I expect the directional findings to hold.
+- **What "reproducible" means here:** the code and the method rerun on any model; the analysis reruns exactly on the published decision logs (from 1b onward, the confirmatory decision files and run fingerprints are published with the results); the agent's outputs a year from now will not be identical, because no model served through an API promises that. Every 1b call records the model, the API version and a hash of the prompt, so any difference can be traced.
 
 ---
 

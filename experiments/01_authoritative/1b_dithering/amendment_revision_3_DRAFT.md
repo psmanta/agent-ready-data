@@ -46,6 +46,7 @@ What is good: H4's design is thorough; the amendment is internally coherent; the
 | R3-15 | Batch mode for every confirmatory call (one batch per block) | D72 | **approved** | Collection Design; Limits |
 | R3-16 | Pin the request stack (API version header, exact library versions, refusal on mismatch) | D75 | **approved** | Collection Design; Limits; freeze list |
 | R3-17 | Run guards: $150 budget pause, 2% failed-call ceiling, 6-hour era check | RT8 (G1, G4) | **approved** | Collection Design; Analysis Plan |
+| R3-18 | Publish the confirmatory decision logs and run fingerprints, hashed in the freeze manifest | RT11 (D95) | **approved** | Pre-Registration Freeze; Data Availability |
 
 ---
 
@@ -295,6 +296,11 @@ The evaluator's own docstring already says four.
 - **Era check (6 hours).** `collect_results.py` orders blocks by their recorded start time (`window.json`); a gap of more than 6 hours between one block's end and the next block's start begins a new era. It writes `collection_eras.json`, adds the eras to `collection_report.json`, and gives every collected row a `collection_era`. Whenever there is more than one era, the analysis reports the clean re-run control's drift per era, and the primary results with era as a factor beside the unadjusted (primary) results.
 
 **Where:** Collection Design, "Running the collection" (the three rules, one sentence each), and Analysis Plan, window effect (the era rule). No freeze-list change: the edited files (`run_collection.py`, `collect_results.py`, `collection_common.py`, `test_batch_runner.py`) are already listed.
+
+### R3-18. Publish the decision logs (approved, D95, 14 November)
+**Why:** "reproducible" should mean that anyone can rerun the analysis and get the same numbers; today the experiment outputs are excluded from the repository, so nobody can. The customers are synthetic, so there is no privacy barrier.
+**What:** with the results, publish every confirmatory decision file (the collected rows, including the agent's reasoning text), the run fingerprints and window files, the plan, and the generation manifest; each file's SHA-256 is listed in the freeze manifest, so a reader can confirm the published logs are the ones analysed. Human-audit rater data stays private (rater identities and per-rater labels); the audit's aggregate results are reported.
+**Where:** Pre-Registration Freeze (one sentence: what is published and when), and a short Data Availability section.
 
 ---
 

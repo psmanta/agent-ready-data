@@ -201,7 +201,7 @@ answers), not the libraries, not the data change under test. Cause unknown (serv
 | Model snapshot | A dated, fixed version of the model. | `claude-haiku-4-5-20251001`. |
 | Token spend | What the AI calls cost, counted in words processed. | `cost_usd` logged per decision. |
 | Check before vs after | Checking the data before the agent reads it (at the point of use), versus reviewing after it decides or hoping the AI notices. | A validation step against a contract at the agent's input assembly (preventive), versus post-decision review or reliance on the agent's own flags. |
-| Canary set | A few known-clean records mixed in with live traffic, like a canary in a mine. A flip on a canary is the model's variance; a failed check is the data. | A control set with a stored reference decision per record, interleaved with live traffic; re-run on any model, prompt, platform or data change. The production form of 1b's clean re-run control. |
+| Canary set | A few known-clean records mixed in with live traffic, like a canary in a mine. A flip on a canary is the model's variance; a failed check is the data. **Canary the decision, not the action:** nothing the canary decides is carried out. | A control set with a stored reference decision per record, interleaved with live traffic; re-run on any model, prompt, platform or data change. Tools that write are stubbed and tools that read replay recorded responses, so the input is fixed and a flip is the model; the alarm threshold is set from the canary's own measured background rate. The production form of 1b's clean re-run control. |
 | Data quality vs decision quality | Data quality is the input; decision quality is the outcome. We measure one thing in between: how much the decision moves when the input is wrong. | Input conformance versus the dependence of decisions on that input; decision stability is necessary for decision quality, not sufficient. |
 | Sensitivity vs correctness | How much decisions move versus whether they are right. We measure only the first. | Drift from the agent's own clean-record decision; no external ground truth. |
 | Consistency (DAMA) | Every value fine on its own, but the row contradicts itself (country US, currency Euro). | A row-level rule across fields; our H3 and the isolated churn test. |
@@ -238,6 +238,13 @@ be the model's own variation (1a's results say so). Never "proved", "no safe lev
 7. "Vanity metric" is used only about *counting* data quality in isolation (a dashboard showing 100% deliverable addresses), never about the work.
 8. **Vocabulary (D33).** Name what we measure "how much the decision moves" (plain) or "decision stability" (technical). "Decision quality" is the
    frame and always carries "stability is necessary, not sufficient". Never "damage", "break", "hurt" or "wrong decisions" for a decision that changed.
+9. **For executives, the pre-flight framing (D87).** Present the method as a pre-flight check for one pilot workflow: corrupt one piece of information
+   at a time on a test copy and see which pieces move the decision; "the API cost is a rounding error; the real cost is a few days of an engineer's
+   time". No study-scale figures (61,000 calls, the $150 budget) in booth answers.
+10. **Tailor by leaving out, never by contradicting (D88).** A short answer may omit a layer (the point-of-use check, for a strategist); it never states
+   a rule that contradicts a decided one ("zero-latency controls only" contradicts D84).
+11. **Never in our voice (D89):** a named company's loss ("a Zillow-sized hit"), the "95% of pilots fail" figure, a fixed count of fields ("three
+   fields"), or "the fields it reads" when we mean "the fields the decision depends on".
 9. **Beat 5 (D42)** reads "How do you decide what to fix first?" and the answer is the three-term worksheet, never a ranking by impact alone.
 10. **Name the agent (D44).** Say "an AI agent that decides from the data it is handed", or "a minimal agent". Never "your AI agent" without that
     qualifier, and never imply the results cover agents with tools, memory or retrieval.

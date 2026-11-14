@@ -191,6 +191,7 @@ An agent we can trust is indifferent to form and sensitive to meaning. The secon
 **Parked from the 1b macro review (IDs to assign)**
 - **In-agent controls:** do cheap controls inside the agent work: an instruction to flag bad data, an explicit flag field, a verification tool, handing it only the fields it needs? (RT5, D45; tests "unless you ask, it won't tell you".)
 - **A second model tier:** replicate 1b's core results on a different model (RT5, D46).
+- **A minimal reference harness:** a small, framework-agnostic example of the "run the pattern on your own agent" wrapper in the 1b README (RT11, D90). An idea, not a roadmap commitment.
 - **Temperature in isolation:** decision instability as a function of temperature, run separately from every data condition (see Open Questions).
 
 **Multi-domain replication:** Apply Pillar 1 experiments across healthcare, finance, and logistics to test whether failure modes and severity generalize beyond retail. The domain assumption documented in Phase 1 will be revisited with empirical evidence.
