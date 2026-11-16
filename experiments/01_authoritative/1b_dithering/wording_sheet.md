@@ -22,7 +22,7 @@ appears (the glossary says how). Every claim is scoped to "this agent, these fie
   model; our numbers are for this one.
 - **Synthetic customers.** 1,000 generated customers; no real people.
 - **No outcome labels.** We measure how much decisions move, not whether they are right.
-- **Funding and independence.** Self-funded with the author's personal API credits; no sponsor. The author works at Salesforce and uses the findings in his work, but the research is independent of it. [Confirmed by the author, 22 October 2026; final wording to approve before publication.]
+- **Funding and independence.** Self-funded with the author's personal API credits; no sponsor. The author works at Salesforce and uses the findings in his work, but the research is independent of it. [Confirmed by the author, 22 October 2026; final wording to approve before publication.] Open-source code; commercial model APIs paid from personal credits (D101). The models are used through public APIs at list prices, with no sponsorship, credits or early access from any provider, and no contact with the providers about the study (D105). [Each item to be confirmed by the author before publication.] Human raters are volunteers who give their own time; taking part is voluntary, they can withdraw at any point, and they are never named (D103).
 
 ---
 
@@ -153,7 +153,8 @@ ran, and was perfectly consistent within each time window. [At 1,000 customers t
 
 **Technical.** Identical input hashes and token counts, the same dated snapshot, prompt and settings; 3 of 30 customers' majority decisions
 changed between sessions (exact 95% range 2.1% to 26.5%), deterministic within a window. Not our code (the pre-patch agent gave the same
-answers), not the libraries, not the data change under test. Cause unknown (serving side). One model, one API.
+answers), not the libraries, not the data change under test. Cause unknown (serving side). One model, one API. Variation at temperature 0 is
+documented across language-model inference generally (He et al., Thinking Machines Lab, 2025); never present it as one provider's defect (D104).
 
 **Will not say:** why it happens; that it affects other models; anything stronger than "in this small check" until the control reports.
 
@@ -188,7 +189,7 @@ answers), not the libraries, not the data change under test. Cause unknown (serv
 | Inconclusive | The data can't tell whether the effect is there or not. Not the same as "no effect". | The net-drift interval includes both zero and M. |
 | Stable customer | One the agent decides the same way every time. | All baseline runs agree, across windows. |
 | Window | A stretch of time during which the agent behaves consistently. | A scheduling block; behavior can differ between blocks for identical input. |
-| Window effect | The same input, model and prompt giving a different decision at a different time. | Cross-window disagreement; measured by the clean re-run control. |
+| Window effect | The same input, model and prompt giving a different decision at a different time. Documented across language models generally, not one provider's quirk. | Cross-window disagreement; measured by the clean re-run control. |
 | Clean re-run control | The clean data run again, mixed in with everything, to measure how much the decision moves with nothing changed. | `h0_clean_rerun_1`: zero dithering, identical input hash, same randomized blocks. |
 | Noise floor | How much the agent's answer moves even when nothing is wrong. | Within-baseline disagreement, and the control's drift. |
 | Explicit doubt | The agent says in words that something looks wrong. | A frozen keyword scan of the reasoning text, with adverb forms. |
@@ -245,6 +246,20 @@ be the model's own variation (1a's results say so). Never "proved", "no safe lev
    a rule that contradicts a decided one ("zero-latency controls only" contradicts D84).
 11. **Never in our voice (D89):** a named company's loss ("a Zillow-sized hit"), the "95% of pilots fail" figure, a fixed count of fields ("three
    fields"), or "the fields it reads" when we mean "the fields the decision depends on".
+12. **No product claims (D96).** The research says nothing about any company's products: the author's employer's, a partner's or a competitor's.
+   To "does this happen in your agents?" the answer is "this study didn't test them; the method lets anyone test any agent." Never "it doesn't
+   happen in ours", "it happens in theirs", "our platform enforces...", or "not an admission".
+13. **Customer-facing use goes through review (D97).** 1b numbers appear in customer material only in this sheet's wording, with their scope and
+   interval, and only through the organisation's normal content review; the author is not the approver. The 30-customer figures stay off customer
+   slides until the full run, or carry their interval and the words "small check".
+14. **Describe the agent accurately (D98).** A minimal agent with a fixed prompt that gives no decision criteria, reading clean, validated synthetic
+   data. Never "naked", "unguarded", "no system prompt", "raw" or "unmanaged data", or "built to prove".
+15. **Screenshot-proof charts (D99).** Every published chart image carries a one-line scope inside the image: one model, a minimal agent,
+   synthetic customers, no outcome labels.
+16. **Independence is the defence (D100).** No research piece names any company's product or makes comparative claims. The author supplies this
+   wording sheet, never sales talk tracks; if a company cites the work, it does so through its own reviewed process under rules 12 and 13.
+17. **The window effect is an industry-wide property (D104).** Cite the documented temperature-0 variation across inference; never "a bug in
+   [provider]" or "[provider]'s defect".
 9. **Beat 5 (D42)** reads "How do you decide what to fix first?" and the answer is the three-term worksheet, never a ranking by impact alone.
 10. **Name the agent (D44).** Say "an AI agent that decides from the data it is handed", or "a minimal agent". Never "your AI agent" without that
     qualifier, and never imply the results cover agents with tools, memory or retrieval.

@@ -31,6 +31,7 @@ That breaks into three business questions:
 | `1b_DESIGN_AMENDMENT_1.md` | **The current, binding design:** hypotheses H1 to H8b, conditions, statistics, freeze rules |
 | `macro_review.md` | A plain-language review of whether the design still answers the question, with a numbered decision log (D1 onward) |
 | `wording_sheet.md` | The source of truth for every public statement about 1b; number slots are filled after the run |
+| `booth_card.md` | One page: the seven rules behind the decisions, lines that answer most questions, and phrases never to use (`check_wording.py` scans a draft for them) |
 | `amendment_fold_in_ledger.md` | Every change to the amendment, with its reason |
 | `statistical_methodology_note.md` | Why each statistical tool was chosen |
 | `h5_working_doc.md` | The working record for H5 (does the agent flag bad data?) |
